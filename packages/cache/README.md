@@ -203,7 +203,10 @@ const cache = new EffectCache(new Cache(new RedisStore({ client: redis })));
 
 const program = Effect.gen(function* () {
   yield* cache.set(["user", 1], user, { ttl: 60_000 });
-  return yield* cache.getOrSet(["report"], buildReportEffect);
+  return yield* cache.getOrSet(
+    ["report"],
+    Effect.promise(() => buildReport()),
+  );
 });
 ```
 
@@ -218,12 +221,15 @@ Every method returns an `Effect`. Driver and key failures become `CacheError`. L
 
 ## Testing your code
 
-Use `MemoryStore` with an injected clock to control time:
+Inject the same clock into both `Cache` and `MemoryStore`:
 
 ```ts
 const clock = { t: 0 };
-const cache = new Cache(new MemoryStore({ now: () => clock.t }));
+const now = () => clock.t;
+const cache = new Cache(new MemoryStore({ now }), { now });
 ```
+
+Cache's `now` controls `flexible()` freshness windows. MemoryStore's `now` controls entry expiry. Passing only the store clock leaves `flexible()` on the real clock.
 
 ## Running tests
 
