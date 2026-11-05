@@ -312,10 +312,10 @@ describe("withoutOverlapping (locks)", () => {
 
   it("an expired holder releasing late does not free its successor's lock", async () => {
     const cache = realCache();
-    const a = cache.withoutOverlapping(["k"], () => sleep(100), { lockFor: 50 });
-    await sleep(60);
+    // maxHoldFor (50) is shorter than a's callback (100): renewal stops, a's lease lapses, and b takes over.
+    const a = cache.withoutOverlapping(["k"], () => sleep(100), { lockFor: 50, maxHoldFor: 50 });
     const b = cache.withoutOverlapping(["k"], () => sleep(200), { lockFor: 5000, waitFor: 1000 });
-    await sleep(60); // a has finished at ~100ms; its release must be a no-op on b's lock
+    await sleep(120); // a has settled at ~100ms; its late release must be a no-op on b's lock
     await expect(cache.withoutOverlapping(["k"], () => 1, { waitFor: 0 })).rejects.toBeInstanceOf(LockTimeoutError);
     await Promise.all([a, b]);
   });
