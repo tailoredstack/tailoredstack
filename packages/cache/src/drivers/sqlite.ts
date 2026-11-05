@@ -11,6 +11,12 @@ interface Row {
   expires_at: number | null;
 }
 
+// Exclusive upper bound of keys starting with `prefix`: last char + 1. Callers pass non-empty prefixes that end in
+// ASCII "]", "," or are "[" (see Cache.invalidate), so the bump stays inside one code unit and never overflows.
+const upperBound = (prefix: string) => prefix.slice(0, -1) + String.fromCharCode(prefix.charCodeAt(prefix.length - 1) + 1);
+
+const PREFIX_SQL = "SELECT key FROM cache WHERE key >= ? AND key < ? AND (expires_at IS NULL OR expires_at > ?)";
+
 export class SqliteStore implements Store {
   readonly #db: DatabaseSync;
   readonly #now: () => number;
@@ -24,6 +30,7 @@ export class SqliteStore implements Store {
   readonly #all: StatementSync;
   readonly #forgetIf: StatementSync;
   readonly #extendIf: StatementSync;
+  readonly #withPrefix: StatementSync;
 
   constructor({ path, now = Date.now }: SqliteStoreOptions) {
     this.#db = new DatabaseSync(path);
@@ -49,6 +56,7 @@ export class SqliteStore implements Store {
       "UPDATE cache SET expires_at = ? WHERE key = ? AND value = ? AND (expires_at IS NULL OR expires_at > ?)",
     );
     this.#all = this.#db.prepare("SELECT key, value FROM cache WHERE expires_at IS NULL OR expires_at > ?");
+    this.#withPrefix = this.#db.prepare(PREFIX_SQL);
   }
 
   #expiry(ttlMs: number | null): number | null {
@@ -127,5 +135,19 @@ export class SqliteStore implements Store {
   async *entries(): AsyncGenerator<{ key: string; value: unknown }> {
     const rows = this.#all.all(this.#now()) as unknown as { key: string; value: string }[];
     for (const row of rows) yield { key: row.key, value: JSON.parse(row.value) };
+  }
+
+  // Range scan on the primary-key index: O(matches). Never a table scan.
+  async *keysWithPrefix(prefix: string): AsyncGenerator<string> {
+    const rows = this.#withPrefix.all(prefix, upperBound(prefix), this.#now()) as unknown as { key: string }[];
+    for (const row of rows) yield row.key;
+  }
+
+  /** Test-only: EXPLAIN QUERY PLAN for keysWithPrefix. Not part of the public API. @internal */
+  explainKeysWithPrefix(prefix: string): string[] {
+    const rows = this.#db
+      .prepare(`EXPLAIN QUERY PLAN ${PREFIX_SQL}`)
+      .all(prefix, upperBound(prefix), this.#now()) as unknown as { detail: string }[];
+    return rows.map((row) => row.detail);
   }
 }

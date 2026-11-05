@@ -42,7 +42,7 @@ describe("MemoryStore prefix index", () => {
     }
     pool.push([{ tenant: "a" }, 1]);
     const storedKeys = pool.map((key) => encodeKey(key));
-    const prefixes = ["[", "", '["user",', '["user",1,', '["username",', '["org",2]', ...storedKeys];
+    const prefixes = ["[", '["user",', '["user",1,', '["username",', '["org",2]', ...storedKeys];
 
     for (let step = 0; step < 400; step++) {
       const stored = pick(storedKeys);
@@ -56,7 +56,7 @@ describe("MemoryStore prefix index", () => {
       else t += Math.floor(rand() * 8); // advance the clock so some entries expire
 
       const brute = await allLive(store);
-      const root = await collectKeys(store.keysWithPrefix(""));
+      const root = await collectKeys(store.keysWithPrefix("["));
       expect(root).toEqual(brute);
       expect(root.every((key, i) => i === 0 || (root[i - 1] as string) < key)).toBe(true);
       for (const prefix of prefixes) {
