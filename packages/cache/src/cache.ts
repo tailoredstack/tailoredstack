@@ -49,7 +49,9 @@ export type CacheEvent =
   | { type: "hit"; key: Key }
   | { type: "miss"; key: Key }
   | { type: "write"; key: Key }
-  | { type: "forget"; key: Key };
+  | { type: "forget"; key: Key }
+  // The lock was not released. The callback's outcome is unaffected; the lease lapses at lockFor.
+  | { type: "release-failed"; key: Key; error: unknown };
 
 export type CacheListener = (event: CacheEvent) => void;
 
@@ -393,7 +395,7 @@ export class Cache<S extends Store = Store> {
     const lockKey = `lock:${this.#stored(key)}`;
     const token = `${Math.random()}:${this.#now()}`;
     await this.#acquire(lockKey, token, options, this.#full(key));
-    return this.#lease(lockKey, token, options, callback);
+    return this.#lease(lockKey, token, options, callback, this.#full(key));
   }
 
   /** At most `limit` callbacks run concurrently for `key`. Each slot is a lock with its own token. */
@@ -409,7 +411,7 @@ export class Cache<S extends Store = Store> {
         const slotKey = `${base}:${slot}`;
         const token = `${Math.random()}:${this.#now()}`;
         const got = await this.#store.add(slotKey, token, toMs(options.lockFor ?? 30_000));
-        if (got) return this.#lease(slotKey, token, options, callback);
+        if (got) return this.#lease(slotKey, token, options, callback, this.#full(key));
       }
       if (this.#now() >= deadline) throw new LockTimeoutError(this.#full(key));
       await sleepFor(10);
@@ -421,7 +423,13 @@ export class Cache<S extends Store = Store> {
    * passes. A lost lease (extendIf false) or a failed renewal stops renewals without failing the callback.
    * Release is token-checked, so a late release never frees a successor's lock.
    */
-  async #lease<T>(lockKey: string, token: string, options: LockOptions, callback: () => T | Promise<T>): Promise<T> {
+  async #lease<T>(
+    lockKey: string,
+    token: string,
+    options: LockOptions,
+    callback: () => T | Promise<T>,
+    fullKey: Key,
+  ): Promise<T> {
     const lockFor = toMs(options.lockFor ?? 30_000);
     const maxHoldFor = toMs(options.maxHoldFor ?? 300_000);
     const started = this.#now();
@@ -446,8 +454,16 @@ export class Cache<S extends Store = Store> {
     } finally {
       active = false;
       clearTimeout(timer);
-      // A failed release must not replace the callback's result or error. The lease then lapses at lockFor.
-      await this.#store.forgetIf(lockKey, token).catch(() => false);
+      // A failed release must not replace the callback's result or error, so it is reported as an event instead.
+      await this.#store.forgetIf(lockKey, token).catch((error: unknown) => {
+        // A throwing listener must not replace the callback's outcome either.
+        try {
+          this.#emit({ type: "release-failed", key: fullKey, error });
+        } catch {
+          // ignored: the release failure has already been handled as far as the caller can act on it
+        }
+        return false;
+      });
     }
   }
 
