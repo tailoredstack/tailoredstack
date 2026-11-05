@@ -72,7 +72,7 @@ function runConsumer(backend: string, url: string): { ok: boolean; failed: strin
 }
 
 describe("installed @tailoredstack/cache", () => {
-  it("typechecks against its published exports, including the tags() compile gate", () => {
+  it("typechecks against its published exports", () => {
     run(join(work, "node_modules", ".bin", "tsc"), ["-p", "tsconfig.json"], work);
   });
 

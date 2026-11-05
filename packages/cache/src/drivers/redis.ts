@@ -1,5 +1,4 @@
-import { randomUUID } from "node:crypto";
-import type { TaggableStore } from "../contracts.ts";
+import type { Store } from "../contracts.ts";
 
 /**
  * The subset of a Redis client that RedisStore calls. Structural, so declarations never import the optional
@@ -35,7 +34,7 @@ const EXTEND_IF =
 
 const escapeGlob = (s: string) => s.replace(/[*?[\]\\]/g, "\\$&");
 
-export class RedisStore implements TaggableStore {
+export class RedisStore implements Store {
   readonly #client: RedisClient;
   readonly #prefix: string;
 
@@ -114,29 +113,11 @@ export class RedisStore implements TaggableStore {
     return Number(await this.#client.eval(EXTEND_IF, 1, this.#key(key), JSON.stringify(expected), ttlMs)) === 1;
   }
 
-  // Tag ids live outside the entry namespace (no entries() leakage) and never expire.
-  #tagKey(name: string): string {
-    // Cache keys are JSON arrays (start with "["), so this namespace can never collide with an entry.
-    return `${this.#prefix}#tag:${name}`;
-  }
-
-  async tagId(name: string): Promise<string> {
-    const k = this.#tagKey(name);
-    const fresh = randomUUID();
-    const won = await this.#client.set(k, fresh, "NX");
-    if (won === "OK") return fresh;
-    return (await this.#client.get(k)) as string;
-  }
-
-  async rotateTag(name: string): Promise<void> {
-    await this.#client.set(this.#tagKey(name), randomUUID());
-  }
-
   // SCAN, not KEYS: KEYS blocks the server on large keyspaces.
   async *entries(): AsyncGenerator<{ key: string; value: unknown }> {
     const stream = this.#client.scanStream({ match: `${escapeGlob(this.#prefix)}*`, count: 500 });
     for await (const batch of stream) {
-      const keys = (batch as string[]).filter((k) => !k.startsWith(`${this.#prefix}#tag:`));
+      const keys = batch as string[];
       if (keys.length === 0) continue;
       const raws = await this.#client.mget(...keys);
       for (const [i, key] of keys.entries()) {

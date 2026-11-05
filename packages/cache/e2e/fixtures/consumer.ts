@@ -67,25 +67,6 @@ await persists("sqlite", () => new SqliteStore({ path: sqlitePath }));
 await exercise(backend, new Cache(new RedisStore({ client, prefix })));
 await persists(backend, () => new RedisStore({ client, prefix }));
 
-// Tags are server-only. Round-trip and flush against the real server.
-const server = new Cache(new RedisStore({ client, prefix }));
-const tagged = server.tags(["user", "org:1"]);
-await tagged.set(["profile", 1], "p", { ttl: 60_000 });
-check(`${backend}: tagged round-trip`, (await tagged.get(["profile", 1])) === "p");
-await server.tags(["user"]).flush();
-check(`${backend}: flush hides tagged items`, (await tagged.get(["profile", 1])) === undefined);
-
-// Compile-time gate: non-taggable stores must not expose tags().
-const mem = new Cache(new MemoryStore());
-const sql = new Cache(new SqliteStore({ path: sqlitePath }));
-const gate = () => {
-  // @ts-expect-error memory store must not expose tags()
-  mem.tags(["user"]);
-  // @ts-expect-error sqlite store must not expose tags()
-  sql.tags(["user"]);
-};
-void gate;
-
 await client.quit();
 rmSync(dir, { recursive: true, force: true });
 
