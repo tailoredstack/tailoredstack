@@ -18,18 +18,21 @@ jobs:
   release-please:
     runs-on: ubuntu-latest
     env:
-      RELEASE_APP_ID: ${{ secrets.RELEASE_APP_ID }}
+      RELEASE_APP_CLIENT_ID: ${{ vars.RELEASE_APP_CLIENT_ID }}
     outputs:
       releases_created: ${{ steps.release.outputs.releases_created }}
     steps:
       # Release PRs opened with GITHUB_TOKEN do not trigger other workflows (CI, commitlint).
-      # A GitHub App token does, so it is used when the RELEASE_APP_* secrets exist.
+      # A GitHub App token does. It is used when the app is configured and installed.
+      # continue-on-error keeps the release running with GITHUB_TOKEN if the app is not
+      # installed on this repository, so a missing install never breaks releases.
       - name: Create release app token 🔑
         id: app-token
-        if: ${{ env.RELEASE_APP_ID != '' }}
+        if: ${{ env.RELEASE_APP_CLIENT_ID != '' }}
+        continue-on-error: true
         uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
         with:
-          app-id: ${{ secrets.RELEASE_APP_ID }}
+          client-id: ${{ env.RELEASE_APP_CLIENT_ID }}
           private-key: ${{ secrets.RELEASE_APP_PRIVATE_KEY }}
       - name: Release Please 🏷️
         id: release
