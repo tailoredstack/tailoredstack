@@ -25,3 +25,11 @@ describe("RedisStore increment stays inside the safe-integer range", () => {
     expect(await cache.get(["n"])).toBe(Number.MAX_SAFE_INTEGER);
   });
 });
+
+describe("an overflowing increment leaves no trace on a missing key", () => {
+  it("does not create the key when the first increment is out of range", async () => {
+    const cache = freshCache();
+    await cache.increment(["fresh"], Number.MAX_SAFE_INTEGER + 1).catch(() => undefined);
+    expect(await cache.has(["fresh"])).toBe(false);
+  });
+});
