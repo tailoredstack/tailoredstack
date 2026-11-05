@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { Cache, MemoryStore } from "../src/index.ts";
+import { MemoryStore } from "../src/index.ts";
 
 // keysWithPrefix must yield every live match even when the caller deletes keys between yields.
 // Before the fix, the generator held an array index across yields, so deleting an earlier key shifted

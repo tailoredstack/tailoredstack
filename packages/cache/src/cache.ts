@@ -1,6 +1,6 @@
 import type { Store } from "./contracts.ts";
 import { decodeKey, encodeKey, invalidationPrefixes, type Key, type KeyInput, matchKey, normalizeKey } from "./keys.ts";
-import { assertSerializable } from "./values.ts";
+import { toStorable } from "./values.ts";
 
 export interface SetOptions {
   /** Milliseconds until expiry. A number, or a function of the value. Omit for the chained default; if none, no expiry. */
@@ -85,11 +85,8 @@ const isEscaped = (raw: unknown): raw is EscapeEnvelope =>
 const needsEscape = (value: unknown): boolean =>
   typeof value === "object" && value !== null && (Object.hasOwn(value, FLEX) || Object.hasOwn(value, ESCAPE));
 
-// Normalize through JSON first: a toJSON() can produce a shape that is not visible on the object itself.
-const escapeValue = (value: unknown): unknown => {
-  const plain: unknown = JSON.parse(JSON.stringify(value));
-  return needsEscape(plain) ? { [ESCAPE]: 1, v: plain } : plain;
-};
+// Takes a storable value (see toStorable), so toJSON() has already run exactly once.
+const escapeValue = (plain: unknown): unknown => (needsEscape(plain) ? { [ESCAPE]: 1, v: plain } : plain);
 const unescapeValue = (raw: unknown): unknown => (isEscaped(raw) ? raw.v : raw);
 
 /** Wait budgets are milliseconds: finite and non-negative. NaN would make the deadline never pass. */
@@ -200,8 +197,15 @@ export class Cache<S extends Store = Store> {
     return started;
   }
 
-  #assertSettable(value: unknown): void {
-    assertSerializable(value);
+  /** The exact value to store: serialized once, then escaped if it looks like an internal envelope. */
+  #prepare(value: unknown): unknown {
+    return escapeValue(toStorable(value));
+  }
+
+  /** Writes a prepared value, so what was checked is what is stored. */
+  async #put(key: KeyInput, stored: unknown, value: unknown, options?: SetOptions): Promise<void> {
+    await this.#store.put(this.#stored(key), stored, this.#ttlFor(value, options));
+    this.#emit({ type: "write", key: this.#full(key) });
   }
 
   /** Unwraps flexible and escape envelopes; plain values pass through. */
@@ -228,9 +232,7 @@ export class Cache<S extends Store = Store> {
   }
 
   async set(key: KeyInput, value: unknown, options?: SetOptions): Promise<void> {
-    this.#assertSettable(value);
-    await this.#store.put(this.#stored(key), escapeValue(value), this.#ttlFor(value, options));
-    this.#emit({ type: "write", key: this.#full(key) });
+    await this.#put(key, this.#prepare(value), value, options);
   }
 
   async delete(key: KeyInput): Promise<boolean> {
@@ -272,9 +274,9 @@ export class Cache<S extends Store = Store> {
   }
 
   async putMany(entries: [KeyInput, unknown][], options?: SetOptions): Promise<void> {
-    // Validate the whole batch first so a bad entry does not leave earlier entries written.
-    for (const [, value] of entries) this.#assertSettable(value);
-    for (const [key, value] of entries) await this.set(key, value, options);
+    // Prepare the whole batch first so a bad entry does not leave earlier entries written.
+    const prepared = entries.map(([key, value]) => [key, this.#prepare(value), value] as const);
+    for (const [key, stored, value] of prepared) await this.#put(key, stored, value, options);
   }
 
   async touch(key: KeyInput, ttl: number): Promise<boolean> {
@@ -283,8 +285,7 @@ export class Cache<S extends Store = Store> {
 
   /** Store only if absent. Returns true when stored. */
   async add(key: KeyInput, value: unknown, options?: SetOptions): Promise<boolean> {
-    this.#assertSettable(value);
-    const stored = await this.#store.add(this.#stored(key), escapeValue(value), this.#ttlFor(value, options));
+    const stored = await this.#store.add(this.#stored(key), this.#prepare(value), this.#ttlFor(value, options));
     if (stored) this.#emit({ type: "write", key: this.#full(key) });
     return stored;
   }
@@ -343,10 +344,9 @@ export class Cache<S extends Store = Store> {
 
     const refresh = async (): Promise<T> => {
       const value = await compute();
-      this.#assertSettable(value);
       const envelope: FlexEnvelope = {
         [FLEX]: 1,
-        v: escapeValue(value),
+        v: this.#prepare(value),
         freshUntil: this.#now() + fresh,
         staleUntil: this.#now() + stale,
       };
