@@ -137,4 +137,27 @@ describe("value serialization guard", () => {
     await expect(cache.set(["m"], new Map([["a", 1]]))).resolves.toBeUndefined();
     await expect(cache.set(["s"], new Set([1]))).resolves.toBeUndefined();
   });
+
+  it("a Map and a Set read back as {} (documented lossy limit)", async () => {
+    const { cache } = setup();
+    await cache.set(["m"], new Map([["a", 1]]));
+    await cache.set(["s"], new Set([1]));
+    expect(await cache.get(["m"])).toEqual({});
+    expect(await cache.get(["s"])).toEqual({});
+  });
+
+  it("a class #private field is absent from the read value (documented lossy limit)", async () => {
+    class Secret {
+      #hidden = "x";
+      visible = 1;
+      reveal() {
+        return this.#hidden;
+      }
+    }
+    const { cache } = setup();
+    await cache.set(["p"], new Secret());
+    const read = (await cache.get(["p"])) as Record<string, unknown>;
+    expect(read).toEqual({ visible: 1 });
+    expect(Object.keys(read)).not.toContain("#hidden");
+  });
 });
