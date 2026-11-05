@@ -13,11 +13,25 @@ describe("escape marker cannot be forged through toJSON", () => {
     }
     const cache = new Cache(new MemoryStore());
     await cache.set(["k"], new Forged());
-    expect(await cache.get(["k"])).not.toBe("LEAK");
+    expect(await cache.get(["k"])).toEqual({ __cache_escaped__: 1, v: "LEAK" });
   });
 });
 
 describe("serialization guard follows what JSON would store", () => {
+  it("runs toJSON once per write and stores the value that was checked", async () => {
+    let calls = 0;
+    class Counter {
+      toJSON() {
+        calls++;
+        return { n: calls };
+      }
+    }
+    const cache = new Cache(new MemoryStore());
+    await cache.set(["c"], new Counter());
+    expect(calls).toBe(1);
+    expect(await cache.get(["c"])).toEqual({ n: 1 });
+  });
+
   it("rejects a class whose toJSON returns undefined", async () => {
     class Shape {
       toJSON() {
