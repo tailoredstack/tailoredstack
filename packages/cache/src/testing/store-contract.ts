@@ -394,6 +394,18 @@ export function storeContract(
       expect(await keysOf(store.keysWithPrefix("["))).toEqual([encodeKey(["a", 1]), encodeKey(["b"])].sort());
     });
 
+    it("keysWithPrefix yields every key when the caller deletes each one while iterating", async () => {
+      const store = make(makeClock());
+      const keys = Array.from({ length: 10 }, (_, i) => encodeKey(["job", i]));
+      for (const key of keys) await store.put(key, 1, null);
+      const yielded: string[] = [];
+      for await (const key of store.keysWithPrefix(childrenOf(["job"]))) {
+        yielded.push(key);
+        await store.forget(key);
+      }
+      expect(yielded.sort()).toEqual([...keys].sort());
+    });
+
     it("keysWithPrefix does not yield a forgotten key", async () => {
       const store = make(makeClock());
       await store.put(encodeKey(["user", 1]), 1, null);
