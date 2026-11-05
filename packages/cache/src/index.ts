@@ -6,6 +6,7 @@ export {
   type CacheListener,
   type CacheOptions,
   type FunnelOptions,
+  type GetOrSetOptions,
   type InvalidateFilter,
   type InvalidateOptions,
   type LockOptions,

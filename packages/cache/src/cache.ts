@@ -9,6 +9,14 @@ export interface SetOptions {
   ttl?: number | ((value: unknown) => number);
 }
 
+export type GetOrSetOptions = SetOptions & {
+  /**
+   * Single-flight the miss across processes via withoutOverlapping. Off by default. `true` uses the lock defaults;
+   * a LockOptions object tunes them. Under the lock the key is re-read, so a value filled by another holder is used.
+   */
+  lock?: boolean | LockOptions;
+};
+
 export interface InvalidateOptions {
   exact?: boolean;
 }
@@ -257,12 +265,17 @@ export class Cache<S extends Store = Store> {
     return removed;
   }
 
-  async getOrSet<T>(key: KeyInput, compute: () => T | Promise<T>, options?: SetOptions): Promise<T> {
+  async getOrSet<T>(key: KeyInput, compute: () => T | Promise<T>, options?: GetOrSetOptions): Promise<T> {
     const hit = await this.get<T>(key);
     if (hit !== undefined) return hit;
-    const value = await compute();
-    await this.set(key, value, options);
-    return value;
+    const { lock, ...setOptions } = options ?? {};
+    const fill = async (): Promise<T> => {
+      const value = await compute();
+      await this.set(key, value, setOptions);
+      return value;
+    };
+    if (!lock) return fill();
+    return this.withoutOverlapping(key, async () => (await this.get<T>(key)) ?? fill(), lock === true ? {} : lock);
   }
 
   async many(keys: KeyInput[]): Promise<(unknown | undefined)[]> {

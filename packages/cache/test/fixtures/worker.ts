@@ -46,6 +46,18 @@ async function main(): Promise<unknown> {
     case "lock-try": {
       return cache.withoutOverlapping(["job"], () => "got-it", { waitFor: 0 });
     }
+    case "getorset-lock": {
+      // Miss on a shared key. Computes once across processes: counts computes in Redis, then sleeps.
+      return cache.getOrSet(
+        ["once"],
+        async () => {
+          await client.incr(`${prefix}computes`);
+          await sleep(Number(arg));
+          return "computed";
+        },
+        { lock: { lockFor: 5_000, waitFor: 10_000 } },
+      );
+    }
     case "funnel-hold": {
       return cache.funnel(["api"], { limit: 2, waitFor: 10_000, lockFor: 5_000 }, async () => {
         await client.incr(`${prefix}active`);

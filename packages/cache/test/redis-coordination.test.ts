@@ -101,6 +101,15 @@ describe("cross-process locks (Redis)", () => {
   });
 });
 
+describe("cross-process getOrSet lock (Redis)", () => {
+  it("two processes computing one missing key run the compute once", async () => {
+    const prefix = `coord:${randomUUID()}:`;
+    const results = await Promise.all([run(prefix, "getorset-lock", "200"), run(prefix, "getorset-lock", "200")]);
+    expect(results.map((r) => r.result)).toEqual(["computed", "computed"]);
+    expect(await client.get(`${prefix}computes`)).toBe("1");
+  });
+});
+
 describe("cross-process funnel (Redis)", () => {
   it("never more than limit processes run the funnel at once", async () => {
     const prefix = `coord:${randomUUID()}:`;

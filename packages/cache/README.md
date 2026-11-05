@@ -122,7 +122,12 @@ await cache.withoutOverlapping(["import", "org:1"], () => runImport(), {
 
 // At most 3 callers at once for this key.
 await cache.funnel(["external-api"], { limit: 3, waitFor: 2_000 }, () => callApi());
+
+// Compute a missing key once across callers and processes. Off by default.
+await cache.getOrSet(["report", 1], () => buildReport(), { lock: { waitFor: 10_000 } });
 ```
+
+`getOrSet` with `lock: true` (or a `LockOptions` object) reads the key, and on a miss takes `withoutOverlapping` on it. Inside the lock it re-reads the key, so a value another holder just wrote is returned without computing. Otherwise it computes, stores with the given `ttl`, and returns. With `lock: true` the default `waitFor` is 0, so a concurrent caller that cannot take the lock immediately gets `LockTimeoutError`. Pass `{ waitFor }` to wait for the winner instead.
 
 While the callback runs, the lease is renewed every `lockFor / 3`, so a live holder keeps exclusivity past `lockFor`. Renewal stops after `maxHoldFor` (default 300 s). A callback that runs longer than `maxHoldFor` loses its lock: the lease then lapses within `lockFor`, and another caller can enter while it still runs. Set `maxHoldFor` above your longest expected run. `funnel` slots renew the same way.
 
