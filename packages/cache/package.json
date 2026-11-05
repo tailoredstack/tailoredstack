@@ -48,6 +48,7 @@
     "typecheck": "tsc -p tsconfig.test.json"
   },
   "devDependencies": {
+    "@testcontainers/redis": "^12.2.1",
     "@types/node": "^26.6.6",
     "effect": "^4.1.2",
     "ioredis": "^6.0.0",

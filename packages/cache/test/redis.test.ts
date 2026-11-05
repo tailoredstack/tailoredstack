@@ -1,11 +1,11 @@
 import { randomUUID } from "node:crypto";
 import { Redis } from "ioredis";
-import { afterAll, describe, expect, it } from "vitest";
+import { afterAll, describe, expect, inject, it } from "vitest";
 import { RedisStore } from "../src/drivers/redis.ts";
 import { storeContract } from "../src/testing/index.ts";
 
-// Local Redis/Valkey on 6390 (see README). Override with REDIS_URL.
-const url = process.env.REDIS_URL ?? "redis://127.0.0.1:6390";
+// Redis container started once per run by test/global-setup.ts.
+const url = inject("redisUrl");
 const client = new Redis(url, { maxRetriesPerRequest: 1 });
 
 // Each store gets a unique key prefix so tests never see each other's keys.

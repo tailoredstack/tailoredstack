@@ -1,10 +1,10 @@
 import { randomUUID } from "node:crypto";
 import { Redis } from "ioredis";
-import { afterAll, describe, expect, it } from "vitest";
+import { afterAll, describe, expect, inject, it } from "vitest";
 import { Cache, MemoryStore, RedisStore, type TaggableStore, UnsupportedError } from "../src/index.ts";
 
-// Tag tests need a live Redis/Valkey on 6390 (override with REDIS_URL). They fail loudly when it is down.
-const url = process.env.REDIS_URL ?? "redis://127.0.0.1:6390";
+// Redis container started once per run by test/global-setup.ts.
+const url = inject("redisUrl");
 const client = new Redis(url, { maxRetriesPerRequest: 1 });
 
 afterAll(() => {

@@ -164,12 +164,11 @@ Costs (Laravel-style, by design):
 
 ```ts
 import { Redis } from "ioredis";
-import Database from "better-sqlite3"; // or node:sqlite
 import { Cache, MemoryStore, SqliteStore, RedisStore } from "@tailoredstack/cache";
 
 new Cache(new MemoryStore()); // in process, lost on restart
-new Cache(new SqliteStore({ path: "./cache.db" })); // file, single host, no server
-new Cache(new RedisStore({ client: new Redis(url), prefix: "app:" })); // shared; works with Valkey
+new Cache(new SqliteStore({ path: "./cache.db" })); // file, single host, uses node:sqlite, no server
+new Cache(new RedisStore({ client: new Redis("redis://localhost:6379"), prefix: "app:" })); // shared; works with Valkey
 ```
 
 `prefix` namespaces every key the store writes, so two caches on one server don't collide and `entries()` only sees its own keys.
@@ -224,6 +223,26 @@ Use `MemoryStore` with an injected clock to control time:
 ```ts
 const clock = { t: 0 };
 const cache = new Cache(new MemoryStore({ now: () => clock.t }));
+```
+
+## Running tests
+
+The Redis suites start their own Redis 8 container through Testcontainers, so you need a running Docker daemon and no fixed port.
+
+```sh
+pnpm --filter @tailoredstack/cache test
+```
+
+On Colima (macOS), Testcontainers' cleanup container can't mount the Colima socket. Disable it for local runs:
+
+```sh
+TESTCONTAINERS_RYUK_DISABLED=true pnpm --filter @tailoredstack/cache test
+```
+
+Type tests (`@ts-expect-error` gate on `tags()`) run separately:
+
+```sh
+pnpm --filter @tailoredstack/cache typecheck
 ```
 
 ## Limits (v0)

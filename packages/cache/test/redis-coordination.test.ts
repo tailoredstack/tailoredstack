@@ -2,10 +2,10 @@ import { spawn } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { fileURLToPath } from "node:url";
 import { Redis } from "ioredis";
-import { afterAll, describe, expect, it } from "vitest";
+import { afterAll, describe, expect, inject, it } from "vitest";
 
 // Cross-process proof: each operation runs in a real child process sharing only Redis.
-const url = process.env.REDIS_URL ?? "redis://127.0.0.1:6390";
+const url = inject("redisUrl");
 const client = new Redis(url, { maxRetriesPerRequest: 1 });
 const worker = fileURLToPath(new URL("./fixtures/worker.ts", import.meta.url));
 
