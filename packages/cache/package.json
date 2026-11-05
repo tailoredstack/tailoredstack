@@ -1,0 +1,54 @@
+{
+  "name": "@tailoredstack/cache",
+  "version": "0.0.0",
+  "description": "One typed cache API over pluggable stores: memory, sqlite, redis. TanStack-style keys, tags, locks.",
+  "type": "module",
+  "license": "ISC",
+  "private": true,
+  "sideEffects": false,
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    },
+    "./effect": {
+      "types": "./dist/effect/index.d.ts",
+      "default": "./dist/effect/index.js"
+    },
+    "./testing": {
+      "types": "./dist/testing/index.d.ts",
+      "default": "./dist/testing/index.js"
+    }
+  },
+  "files": [
+    "dist"
+  ],
+  "peerDependencies": {
+    "effect": "^4.1.2",
+    "ioredis": "^6.0.0",
+    "vitest": "^5.1.0"
+  },
+  "peerDependenciesMeta": {
+    "effect": {
+      "optional": true
+    },
+    "ioredis": {
+      "optional": true
+    },
+    "vitest": {
+      "optional": true
+    }
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "test": "vitest run",
+    "typecheck": "tsc -p tsconfig.test.json"
+  },
+  "devDependencies": {
+    "@types/node": "^26.6.6",
+    "effect": "^4.1.2",
+    "ioredis": "^6.0.0",
+    "typescript": "^7.0.2",
+    "vitest": "^5.1.0"
+  }
+}
