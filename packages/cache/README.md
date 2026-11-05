@@ -251,3 +251,4 @@ pnpm --filter @tailoredstack/cache typecheck
 - `flexible` and `getOrSet` single-flight per process only.
 - Locks are advisory: a callback longer than `maxHoldFor` loses its lock, and its work can overlap with the next holder's.
 - Values are JSON. Dates come back as strings; store `toISOString()` or a number.
+- Map and Set are stored as `{}`. Class private fields (`#x`) are not stored. Only enumerable own properties and `toJSON()` output are kept.
