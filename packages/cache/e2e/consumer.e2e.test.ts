@@ -47,6 +47,7 @@ beforeAll(async () => {
       "effect@^4",
       "typescript@^7",
       "@types/node@^26",
+      "vitest@^5",
     ],
     work,
   );
