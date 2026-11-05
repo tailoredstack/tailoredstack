@@ -31,7 +31,7 @@ describe("package.json contract", () => {
   it("built declarations do not import ioredis (optional peer must not leak into types)", () => {
     for (const file of ["dist/index.d.ts", "dist/drivers/redis.d.ts"]) {
       const text = readFileSync(new URL(`../${file}`, import.meta.url), "utf8");
-      expect(text, file).not.toContain("from \"ioredis\"");
+      expect(text, file).not.toContain('from "ioredis"');
     }
   });
 

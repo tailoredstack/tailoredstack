@@ -4,10 +4,5 @@
     "noEmit": true,
     "rootDir": "."
   },
-  "include": [
-    "src",
-    "test/global-setup.ts",
-    "test/**/*.test.ts",
-    "test/**/*.typecheck.ts"
-  ]
+  "include": ["src", "test/global-setup.ts", "test/**/*.test.ts", "test/**/*.typecheck.ts"]
 }

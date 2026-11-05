@@ -310,7 +310,8 @@ export class Cache<S extends Store = Store> {
   async flexible<T>(key: KeyInput, [freshMs, staleMs]: [number, number], compute: () => T | Promise<T>): Promise<T> {
     const fresh = toMs(freshMs);
     const stale = toMs(staleMs);
-    if (fresh > stale) throw new RangeError(`flexible() fresh window (${freshMs}ms) must not exceed stale (${staleMs}ms)`);
+    if (fresh > stale)
+      throw new RangeError(`flexible() fresh window (${freshMs}ms) must not exceed stale (${staleMs}ms)`);
     const stored = await this.#physical(key);
     const raw = await this.#store.get(stored);
     const now = this.#now();

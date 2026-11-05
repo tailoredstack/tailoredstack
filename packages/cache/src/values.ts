@@ -21,7 +21,7 @@ export function assertSerializable(value: unknown, path = "value", seen = new Se
   if (seen.has(obj)) return;
   seen.add(obj);
   if (Array.isArray(obj)) {
-    obj.forEach((item, i) => assertSerializable(item, `${path}[${i}]`, seen));
+    for (let i = 0; i < obj.length; i++) assertSerializable(obj[i], `${path}[${i}]`, seen);
   } else {
     for (const [k, item] of Object.entries(obj)) assertSerializable(item, `${path}.${k}`, seen);
   }
