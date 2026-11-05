@@ -1,4 +1,4 @@
-name: '🚀 Release'
+name: "🚀 Release"
 
 on:
   push:
@@ -43,7 +43,7 @@ jobs:
           node-version-file: .nvmrc
           cache: pnpm
           registry-url: https://npm.pkg.github.com
-          scope: '@tailoredstack'
+          scope: "@tailoredstack"
       - name: Install 📥
         run: pnpm install --frozen-lockfile
       - name: Build 📦
