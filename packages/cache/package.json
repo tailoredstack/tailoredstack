@@ -1,6 +1,6 @@
 {
   "name": "@tailoredstack/cache",
-  "version": "0.0.0",
+  "version": "1.0.0",
   "description": "One typed cache API over pluggable stores: memory, sqlite, redis. TanStack-style keys, tags, locks.",
   "type": "module",
   "license": "ISC",
