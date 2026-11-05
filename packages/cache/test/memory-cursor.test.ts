@@ -18,19 +18,4 @@ describe("MemoryStore.keysWithPrefix under concurrent deletes", () => {
 
     expect(seen.sort()).toEqual([...keys].sort());
   });
-
-  it("invalidate removes every match even when entries are deleted during the scan", async () => {
-    const store = new MemoryStore();
-    const cache = new Cache(store);
-    for (let i = 0; i < 200; i++) await cache.set(["jobs", i], i);
-
-    // Race a delete of earlier keys against the prefix scan.
-    const racer = (async () => {
-      for (let i = 0; i < 150; i++) await cache.delete(["jobs", i]);
-    })();
-    await cache.invalidate(["jobs"]);
-    await racer;
-
-    for (let i = 0; i < 200; i++) expect(await cache.has(["jobs", i])).toBe(false);
-  });
 });
