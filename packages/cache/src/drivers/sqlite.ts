@@ -103,6 +103,8 @@ export class SqliteStore implements Store {
       const current: unknown = row ? JSON.parse(row.value) : 0;
       if (!Number.isInteger(current)) throw new TypeError(`Cache value at "${key}" is not an integer`);
       const next = (current as number) + by;
+      if (!Number.isSafeInteger(next))
+        throw new RangeError(`Cache value at "${key}" would leave the safe integer range`);
       this.#upsert.run(key, JSON.stringify(next), row?.expires_at ?? null);
       this.#db.exec("COMMIT");
       return next;
