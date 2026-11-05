@@ -274,9 +274,17 @@ export class Cache<S extends Store = Store> {
   }
 
   async putMany(entries: [KeyInput, unknown][], options?: SetOptions): Promise<void> {
-    // Prepare the whole batch first so a bad entry does not leave earlier entries written.
-    const prepared = entries.map(([key, value]) => [key, this.#prepare(value), value] as const);
-    for (const [key, stored, value] of prepared) await this.#put(key, stored, value, options);
+    // Resolve every key, value and ttl before the first write, so a bad entry leaves nothing written.
+    const prepared = entries.map(([key, value]) => ({
+      storedKey: this.#stored(key),
+      full: this.#full(key),
+      stored: this.#prepare(value),
+      ttl: this.#ttlFor(value, options),
+    }));
+    for (const p of prepared) {
+      await this.#store.put(p.storedKey, p.stored, p.ttl);
+      this.#emit({ type: "write", key: p.full });
+    }
   }
 
   async touch(key: KeyInput, ttl: number): Promise<boolean> {
