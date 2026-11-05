@@ -88,3 +88,69 @@ describe("waitFor must be finite and non-negative", () => {
     await expect(cache.funnel(["f"], { limit: 1, waitFor: -1 }, () => 1)).rejects.toThrow(RangeError);
   });
 });
+
+describe("non-JSON values are rejected, not coerced", () => {
+  it.each([
+    ["NaN", Number.NaN],
+    ["Infinity", Number.POSITIVE_INFINITY],
+    ["-Infinity", Number.NEGATIVE_INFINITY],
+  ])("rejects %s instead of storing it as null", async (_name, value) => {
+    const cache = new Cache(new MemoryStore());
+    await expect(cache.set(["n"], value)).rejects.toThrow(TypeError);
+  });
+
+  it("rejects a non-finite number nested in an object", async () => {
+    const cache = new Cache(new MemoryStore());
+    await expect(cache.set(["n"], { avg: Number.POSITIVE_INFINITY })).rejects.toThrow(TypeError);
+  });
+
+  it("rejects a sparse array hole instead of storing it as null", async () => {
+    const cache = new Cache(new MemoryStore());
+    const sparse: unknown[] = [];
+    sparse[1] = 1;
+    await expect(cache.set(["s"], sparse)).rejects.toThrow(TypeError);
+  });
+
+  it("rejects an invalid Date instead of storing it as null", async () => {
+    const cache = new Cache(new MemoryStore());
+    await expect(cache.set(["d"], new Date("not a date"))).rejects.toThrow(TypeError);
+  });
+});
+
+describe("putMany validates the whole batch before writing any entry", () => {
+  it("a non-finite value in a later entry leaves earlier entries unwritten", async () => {
+    const cache = new Cache(new MemoryStore());
+    await expect(
+      cache.putMany([
+        [["a"], 1],
+        [["b"], Number.NaN],
+      ]),
+    ).rejects.toThrow(TypeError);
+    expect(await cache.get(["a"])).toBeUndefined();
+  });
+
+  it("an invalid key in a later entry leaves earlier entries unwritten", async () => {
+    const cache = new Cache(new MemoryStore());
+    await expect(
+      cache.putMany([
+        [["a"], 1],
+        [[undefined as never], 2],
+      ]),
+    ).rejects.toThrow();
+    expect(await cache.get(["a"])).toBeUndefined();
+  });
+
+  it("an invalid per-value ttl in a later entry leaves earlier entries unwritten", async () => {
+    const cache = new Cache(new MemoryStore());
+    await expect(
+      cache.putMany(
+        [
+          [["x"], 1],
+          [["y"], 2],
+        ],
+        { ttl: (v: unknown) => (v === 2 ? 0 : 1000) },
+      ),
+    ).rejects.toThrow(RangeError);
+    expect(await cache.get(["x"])).toBeUndefined();
+  });
+});
