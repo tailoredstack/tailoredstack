@@ -167,6 +167,70 @@ export function storeContract(
       expect(await store.forgetIf("k", { a: 1 })).toBe(false);
     });
 
+    timed(
+      "extendIf extends the ttl when the value matches",
+      async () => {
+        const clock = makeClock();
+        const store = make(clock);
+        await store.put("k", { a: 1 }, 10_000);
+        clock.advance(5_000);
+        expect(await store.extendIf("k", { a: 1 }, 10_000)).toBe(true);
+        clock.advance(9_000);
+        expect(await store.get("k")).toEqual({ a: 1 });
+      },
+      async () => {
+        const store = make(makeClock());
+        await store.put("k", "v", 800);
+        await wait(500);
+        expect(await store.extendIf("k", "v", 1000)).toBe(true);
+        await wait(600);
+        expect(await store.get("k")).toBe("v");
+      },
+    );
+
+    timed(
+      "extendIf returns false and keeps the ttl when the value differs",
+      async () => {
+        const clock = makeClock();
+        const store = make(clock);
+        await store.put("k", { a: 1 }, 10_000);
+        clock.advance(5_000);
+        expect(await store.extendIf("k", { a: 2 }, 10_000)).toBe(false);
+        expect(await store.get("k")).toEqual({ a: 1 });
+        clock.advance(5_000);
+        expect(await store.get("k")).toBeUndefined();
+      },
+      async () => {
+        const store = make(makeClock());
+        await store.put("k", "v", 800);
+        await wait(500);
+        expect(await store.extendIf("k", "other", 1000)).toBe(false);
+        await wait(400);
+        expect(await store.get("k")).toBeUndefined();
+      },
+    );
+
+    timed(
+      "extendIf returns false for a missing or expired key",
+      async () => {
+        const clock = makeClock();
+        const store = make(clock);
+        expect(await store.extendIf("missing", 1, 1_000)).toBe(false);
+        await store.put("k", 1, 1_000);
+        clock.advance(1_000);
+        expect(await store.extendIf("k", 1, 1_000)).toBe(false);
+        expect(await store.get("k")).toBeUndefined();
+      },
+      async () => {
+        const store = make(makeClock());
+        expect(await store.extendIf("missing", 1, 1000)).toBe(false);
+        await store.put("k", 1, 300);
+        await wait(400);
+        expect(await store.extendIf("k", 1, 1000)).toBe(false);
+        expect(await store.get("k")).toBeUndefined();
+      },
+    );
+
     it("entries yields every stored key with its value", async () => {
       const store = make(makeClock());
       await store.put("a", 1, null);

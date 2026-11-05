@@ -14,6 +14,11 @@ export interface Store {
   forget(key: string): Promise<boolean>;
   /** Delete only if the stored value equals `expected` (JSON-canonical). Used for lock release. */
   forgetIf(key: string, expected: unknown): Promise<boolean>;
+  /**
+   * Atomic compare-and-extend. If the live entry equals `expected` (JSON-canonical), set its expiry to now + ttlMs
+   * and return true. Otherwise return false and change nothing. Never creates or revives a key. Used for lock renewal.
+   */
+  extendIf(key: string, expected: unknown, ttlMs: number): Promise<boolean>;
   /** Live (unexpired) entries only. */
   entries(): AsyncIterable<{ key: string; value: unknown }>;
 }
