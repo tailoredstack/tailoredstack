@@ -69,6 +69,20 @@ describe("cross-process locks (Redis)", () => {
     await holder;
   });
 
+  it("a holder running past lockFor keeps other processes out", async () => {
+    const prefix = `coord:${randomUUID()}:`;
+    // lockFor 300 ms, hold 1500 ms: five times the lease, so the lock is only kept by renewal.
+    const holder = run(prefix, "lock-hold-renew", "300:1500");
+    await waitFor(async () => (await client.llen(`${prefix}trace`)) >= 1);
+    const enteredAt = Date.now();
+    // Poll until the lease would have lapsed without renewal, while the holder has not exited yet.
+    await waitFor(async () => Date.now() - enteredAt >= 900 && (await client.llen(`${prefix}trace`)) === 1);
+    expect(await run(prefix, "lock-try")).toEqual({ ok: false, error: "LockTimeoutError" });
+    await holder;
+    const kinds = (await client.lrange(`${prefix}trace`, 0, -1)).map((t) => t.split(":")[0]);
+    expect(kinds).toEqual(["enter", "exit"]);
+  });
+
   it("a crashed holder's lock expires and another process can take it", async () => {
     const prefix = `coord:${randomUUID()}:`;
     const child = spawn(

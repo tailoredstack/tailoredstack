@@ -21,8 +21,16 @@ export interface CacheOptions {
 }
 
 export interface LockOptions {
-  /** How long the lock is held before it expires (ms), so a crashed holder can't block forever. */
+  /**
+   * Lease length (ms). A crashed holder's lock expires after this. While the callback runs, the lease is renewed
+   * every lockFor/3 ms, so a live holder keeps exclusivity.
+   */
   lockFor?: number;
+  /**
+   * Longest a holder keeps renewing (ms, default 300_000). Past this, renewal stops and the lock expires within
+   * lockFor, so a callback that runs longer than maxHoldFor loses exclusivity.
+   */
+  maxHoldFor?: number;
   /** How long to keep retrying to acquire (ms). 0 = fail immediately. */
   waitFor?: number;
 }
@@ -352,11 +360,7 @@ export class Cache<S extends Store = Store> {
     const lockKey = `lock:${this.#stored(key)}`;
     const token = `${Math.random()}:${this.#now()}`;
     await this.#acquire(lockKey, token, options, this.#full(key));
-    try {
-      return await callback();
-    } finally {
-      await this.#store.forgetIf(lockKey, token);
-    }
+    return this.#lease(lockKey, token, options, callback);
   }
 
   /** At most `limit` callbacks run concurrently for `key`. Each slot is a lock with its own token. */
@@ -370,16 +374,44 @@ export class Cache<S extends Store = Store> {
         const slotKey = `${base}:${slot}`;
         const token = `${Math.random()}:${this.#now()}`;
         const got = await this.#store.add(slotKey, token, toMs(options.lockFor ?? 30_000));
-        if (got) {
-          try {
-            return await callback();
-          } finally {
-            await this.#store.forgetIf(slotKey, token);
-          }
-        }
+        if (got) return this.#lease(slotKey, token, options, callback);
       }
       if (this.#now() >= deadline) throw new LockTimeoutError(this.#full(key));
       await sleepFor(10);
+    }
+  }
+
+  /**
+   * Run `callback` under a held lock, renewing the lease every lockFor/3 until the callback settles or maxHoldFor
+   * passes. A lost lease (extendIf false) or a failed renewal stops renewals without failing the callback.
+   * Release is token-checked, so a late release never frees a successor's lock.
+   */
+  async #lease<T>(lockKey: string, token: string, options: LockOptions, callback: () => T | Promise<T>): Promise<T> {
+    const lockFor = toMs(options.lockFor ?? 30_000);
+    const maxHoldFor = toMs(options.maxHoldFor ?? 300_000);
+    const started = this.#now();
+    let active = true;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const renew = async (): Promise<void> => {
+      if (!active) return;
+      if (this.#now() - started >= maxHoldFor) {
+        active = false;
+        return;
+      }
+      try {
+        if (!(await this.#store.extendIf(lockKey, token, lockFor))) active = false;
+      } catch {
+        active = false;
+      }
+      if (active) timer = setTimeout(renew, lockFor / 3);
+    };
+    timer = setTimeout(renew, lockFor / 3);
+    try {
+      return await callback();
+    } finally {
+      active = false;
+      clearTimeout(timer);
+      await this.#store.forgetIf(lockKey, token);
     }
   }
 

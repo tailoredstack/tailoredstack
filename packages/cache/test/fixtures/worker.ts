@@ -23,6 +23,20 @@ async function main(): Promise<unknown> {
         { lockFor: 5_000, waitFor: 10_000 },
       );
     }
+    case "lock-hold-renew": {
+      // arg is "lockFor:holdMs". Holds for longer than lockFor, so only renewal keeps other processes out.
+      const [lockFor, holdMs] = arg.split(":").map(Number) as [number, number];
+      return cache.withoutOverlapping(
+        ["job"],
+        async () => {
+          await client.rpush(`${prefix}trace`, `enter:${process.pid}:${Date.now()}`);
+          await sleep(holdMs);
+          await client.rpush(`${prefix}trace`, `exit:${process.pid}:${Date.now()}`);
+          return "held";
+        },
+        { lockFor, waitFor: 10_000 },
+      );
+    }
     case "lock-crash": {
       // Take the lock and hang forever inside it. The parent SIGKILLs us: a real crash, no release.
       void cache.withoutOverlapping(["job"], () => new Promise(() => {}), { lockFor: Number(arg), waitFor: 0 });
