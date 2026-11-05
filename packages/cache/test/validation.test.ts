@@ -9,6 +9,35 @@ function setup() {
   return { clock, store, cache: new Cache(store, { now: clock.now }) };
 }
 
+describe("increment/decrement step validation", () => {
+  it.each([
+    ["NaN", Number.NaN],
+    ["1.5", 1.5],
+    ["Infinity", Number.POSITIVE_INFINITY],
+    ["unsafe integer", Number.MAX_SAFE_INTEGER + 1],
+  ])("increment rejects %s with RangeError and stores nothing", async (_label, by) => {
+    const { cache } = setup();
+    await expect(cache.increment(["n"], by)).rejects.toThrow(RangeError);
+    expect(await cache.has(["n"])).toBe(false);
+  });
+
+  it.each([
+    ["NaN", Number.NaN],
+    ["1.5", 1.5],
+    ["Infinity", Number.POSITIVE_INFINITY],
+  ])("decrement rejects %s with RangeError and stores nothing", async (_label, by) => {
+    const { cache } = setup();
+    await expect(cache.decrement(["n"], by)).rejects.toThrow(RangeError);
+    expect(await cache.has(["n"])).toBe(false);
+  });
+
+  it("a rejected fractional increment does not poison the next increment", async () => {
+    const { cache } = setup();
+    await expect(cache.increment(["n"], 1.5)).rejects.toThrow(RangeError);
+    expect(await cache.increment(["n"], 2)).toBe(2);
+  });
+});
+
 describe("value serialization guard", () => {
   it.each([
     ["undefined", undefined],

@@ -264,11 +264,17 @@ export class Cache<S extends Store = Store> {
     return stored;
   }
 
+  #assertStep(by: number): void {
+    if (!Number.isSafeInteger(by)) throw new RangeError(`step must be a safe integer, got ${by}`);
+  }
+
   async increment(key: KeyInput, by = 1): Promise<number> {
+    this.#assertStep(by);
     return this.#store.increment(await this.#physical(key), by);
   }
 
   async decrement(key: KeyInput, by = 1): Promise<number> {
+    this.#assertStep(by);
     return this.#store.decrement(await this.#physical(key), by);
   }
 
