@@ -23,6 +23,7 @@ export class SqliteStore implements Store {
   readonly #touch: StatementSync;
   readonly #all: StatementSync;
   readonly #forgetIf: StatementSync;
+  readonly #extendIf: StatementSync;
 
   constructor({ path, now = Date.now }: SqliteStoreOptions) {
     this.#db = new DatabaseSync(path);
@@ -43,6 +44,9 @@ export class SqliteStore implements Store {
     );
     this.#forgetIf = this.#db.prepare(
       "DELETE FROM cache WHERE key = ? AND value = ? AND (expires_at IS NULL OR expires_at > ?)",
+    );
+    this.#extendIf = this.#db.prepare(
+      "UPDATE cache SET expires_at = ? WHERE key = ? AND value = ? AND (expires_at IS NULL OR expires_at > ?)",
     );
     this.#all = this.#db.prepare("SELECT key, value FROM cache WHERE expires_at IS NULL OR expires_at > ?");
   }
@@ -113,6 +117,11 @@ export class SqliteStore implements Store {
 
   async forgetIf(key: string, expected: unknown): Promise<boolean> {
     return this.#forgetIf.run(key, JSON.stringify(expected), this.#now()).changes === 1;
+  }
+
+  async extendIf(key: string, expected: unknown, ttlMs: number): Promise<boolean> {
+    const now = this.#now();
+    return this.#extendIf.run(now + ttlMs, key, JSON.stringify(expected), now).changes === 1;
   }
 
   async *entries(): AsyncGenerator<{ key: string; value: unknown }> {

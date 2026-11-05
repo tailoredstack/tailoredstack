@@ -91,6 +91,13 @@ export class MemoryStore implements Store {
     return true;
   }
 
+  async extendIf(key: string, expected: unknown, ttlMs: number): Promise<boolean> {
+    const entry = this.#live(key);
+    if (!entry || entry.raw !== JSON.stringify(expected)) return false;
+    this.#entries.set(key, { ...entry, expiresAt: this.#expiry(ttlMs) });
+    return true;
+  }
+
   async *entries(): AsyncGenerator<{ key: string; value: unknown }> {
     for (const [key, entry] of this.#entries) {
       if (entry.expiresAt !== null && this.#now() >= entry.expiresAt) {

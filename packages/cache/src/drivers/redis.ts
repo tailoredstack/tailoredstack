@@ -29,6 +29,10 @@ export interface RedisStoreOptions {
 // Atomic compare-and-delete: a holder whose lock expired cannot delete its successor's lock.
 const FORGET_IF = "if redis.call('GET', KEYS[1]) == ARGV[1] then return redis.call('DEL', KEYS[1]) else return 0 end";
 
+// Atomic compare-and-extend: renews only while the stored value still matches (the holder still owns the lock).
+const EXTEND_IF =
+  "if redis.call('GET', KEYS[1]) == ARGV[1] then return redis.call('PEXPIRE', KEYS[1], ARGV[2]) else return 0 end";
+
 const escapeGlob = (s: string) => s.replace(/[*?[\]\\]/g, "\\$&");
 
 export class RedisStore implements TaggableStore {
@@ -104,6 +108,10 @@ export class RedisStore implements TaggableStore {
 
   async forgetIf(key: string, expected: unknown): Promise<boolean> {
     return Number(await this.#client.eval(FORGET_IF, 1, this.#key(key), JSON.stringify(expected))) === 1;
+  }
+
+  async extendIf(key: string, expected: unknown, ttlMs: number): Promise<boolean> {
+    return Number(await this.#client.eval(EXTEND_IF, 1, this.#key(key), JSON.stringify(expected), ttlMs)) === 1;
   }
 
   // Tag ids live outside the entry namespace (no entries() leakage) and never expire.
