@@ -115,13 +115,16 @@ const report = await cache.flexible(["report"], [60_000, 3_600_000], () => build
 ```ts
 // Only one caller runs at a time for this key. Waits up to waitFor ms, else LockTimeoutError.
 await cache.withoutOverlapping(["import", "org:1"], () => runImport(), {
-  lockFor: 30_000, // lock expires after this, so a crashed holder can't block forever
+  lockFor: 30_000, // lease length: a crashed holder's lock expires after this
+  maxHoldFor: 300_000, // optional, default 300_000: longest renewal, see below
   waitFor: 5_000,
 });
 
 // At most 3 callers at once for this key.
 await cache.funnel(["external-api"], { limit: 3, waitFor: 2_000 }, () => callApi());
 ```
+
+While the callback runs, the lease is renewed every `lockFor / 3`, so a live holder keeps exclusivity past `lockFor`. Renewal stops after `maxHoldFor` (default 300 s). A callback that runs longer than `maxHoldFor` loses its lock: the lease then lapses within `lockFor`, and another caller can enter while it still runs. Set `maxHoldFor` above your longest expected run. `funnel` slots renew the same way.
 
 Release is token-checked: a holder whose lock expired cannot release its successor's lock.
 
@@ -256,5 +259,5 @@ pnpm --filter @tailoredstack/cache typecheck
 - `invalidate()` is O(N) over the store.
 - `flexible` and `getOrSet` single-flight per process only.
 - Tags require Redis or Valkey. No tags on memory or SQLite.
-- Locks are advisory: a holder that outlives `lockFor` loses the lock, and its work can overlap with the next holder's.
+- Locks are advisory: a callback longer than `maxHoldFor` loses its lock, and its work can overlap with the next holder's.
 - Values are JSON. Dates come back as strings; store `toISOString()` or a number.
