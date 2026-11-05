@@ -121,9 +121,7 @@ const failing = Effect.fail(new MyError({ reason: "nope" }));
 describe("EffectCache typed error passthrough", () => {
   it("getOrSet passes the caller's typed error through unchanged", async () => {
     const c = make();
-    const program = c.getOrSet(["k"], failing).pipe(
-      Effect.catchTag("MyError", (e) => Effect.succeed({ caught: e })),
-    );
+    const program = c.getOrSet(["k"], failing).pipe(Effect.catchTag("MyError", (e) => Effect.succeed({ caught: e })));
     const result = await Effect.runPromise(program);
     expect(result).toHaveProperty("caught");
     expect((result as { caught: unknown }).caught).toBeInstanceOf(MyError);
@@ -131,25 +129,19 @@ describe("EffectCache typed error passthrough", () => {
 
   it("flexible passes the caller's typed error through unchanged", async () => {
     const c = make();
-    const program = c.flexible(["f"], [1000, 1000], failing).pipe(
-      Effect.catchTag("MyError", (e) => Effect.succeed(e)),
-    );
+    const program = c.flexible(["f"], [1000, 1000], failing).pipe(Effect.catchTag("MyError", (e) => Effect.succeed(e)));
     expect(await Effect.runPromise(program)).toBeInstanceOf(MyError);
   });
 
   it("withoutOverlapping passes the caller's typed error through unchanged", async () => {
     const c = make();
-    const program = c.withoutOverlapping(["l"], failing).pipe(
-      Effect.catchTag("MyError", (e) => Effect.succeed(e)),
-    );
+    const program = c.withoutOverlapping(["l"], failing).pipe(Effect.catchTag("MyError", (e) => Effect.succeed(e)));
     expect(await Effect.runPromise(program)).toBeInstanceOf(MyError);
   });
 
   it("funnel passes the caller's typed error through unchanged", async () => {
     const c = make();
-    const program = c.funnel(["api"], { limit: 1 }, failing).pipe(
-      Effect.catchTag("MyError", (e) => Effect.succeed(e)),
-    );
+    const program = c.funnel(["api"], { limit: 1 }, failing).pipe(Effect.catchTag("MyError", (e) => Effect.succeed(e)));
     expect(await Effect.runPromise(program)).toBeInstanceOf(MyError);
   });
 
