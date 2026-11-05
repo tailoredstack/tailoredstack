@@ -34,6 +34,9 @@ jobs:
         with:
           client-id: ${{ env.RELEASE_APP_CLIENT_ID }}
           private-key: ${{ secrets.RELEASE_APP_PRIVATE_KEY }}
+      - name: Warn when release app token failed
+        if: ${{ env.RELEASE_APP_CLIENT_ID != '' && steps.app-token.outcome == 'failure' }}
+        run: echo "::warning title=Release app token failed::Falling back to GITHUB_TOKEN; release PRs will not trigger CI."
       - name: Release Please 🏷️
         id: release
         uses: googleapis/release-please-action@45996ed1f6d02564a971a2fa1b5860e934307cf7 # v5.0.0
