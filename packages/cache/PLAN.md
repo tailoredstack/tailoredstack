@@ -9,6 +9,10 @@ Milestones:
 - 2 drivers, shared contract (memory, sqlite, redis): done
 - 3 exports and packaging (./effect, ./testing, optional peers): done
 - 4 tags (Redis only, compile-time gated): done, removed in 4b
+- 4b remove the tags API: array keys on every store, no UnsupportedError: done
+- 4c prefix index: array-key invalidate is O(matches) on memory, sqlite, redis. keysWithPrefix on the Store contract.
+  Memory: sorted key array. SQLite: primary-key range scan. Redis: index sets per child prefix, lazy prune.
+  Predicate invalidate stays a full scan.
 - 5 docs: README done; this file trimmed to status
 - 6 SQL stores (postgres, mysql, pglite): planned, see below
 
@@ -46,3 +50,8 @@ Open decisions:
 - Raw SQL with injected clients (recommended), or a Kysely dependency.
 - MySQL keys: hashed primary key (recommended), or cap key length with `RangeError`.
 - Schema: auto-create on first use (recommended), or user-run migrations.
+
+Open decisions for v1:
+
+- Cache-level tests against live Redis beyond invalidation: only the store contract and invalidation run there.
+- Redis index growth for keys without TTL: lazy prune only. Revisit if it shows up under load.

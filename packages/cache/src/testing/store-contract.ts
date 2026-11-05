@@ -1,5 +1,15 @@
 import { describe, expect, it } from "vitest";
 import type { Store } from "../contracts.ts";
+import { encodeKey, type Key } from "../keys.ts";
+
+// Children prefix of a key: "[\"user\"]" -> "[\"user\",". The exact key is encodeKey(key) itself.
+const childrenOf = (key: Key) => `${encodeKey(key).slice(0, -1)},`;
+
+async function keysOf(iterable: AsyncIterable<string>): Promise<string[]> {
+  const out: string[] = [];
+  for await (const key of iterable) out.push(key);
+  return out.sort();
+}
 
 export interface Clock {
   now(): number;
@@ -350,6 +360,71 @@ export function storeContract(
         await wait(600);
         expect(await store.get("k")).toBe("v");
         expect(await store.touch("missing", 1000)).toBe(false);
+      },
+    );
+
+    it("keysWithPrefix with an exact key yields only that key", async () => {
+      const store = make(makeClock());
+      await store.put(encodeKey(["user", 1]), "u1", null);
+      await store.put(encodeKey(["user", 1, "posts"]), "p1", null);
+      expect(await keysOf(store.keysWithPrefix(encodeKey(["user", 1])))).toEqual([encodeKey(["user", 1])]);
+    });
+
+    it("keysWithPrefix with a children prefix skips look-alike segments", async () => {
+      const store = make(makeClock());
+      await store.put(encodeKey(["user", 1]), 1, null);
+      await store.put(encodeKey(["user", 2]), 2, null);
+      await store.put(encodeKey(["username", 1]), 3, null);
+      expect(await keysOf(store.keysWithPrefix(childrenOf(["user"])))).toEqual(
+        [encodeKey(["user", 1]), encodeKey(["user", 2])].sort(),
+      );
+    });
+
+    it("keysWithPrefix with a numeric children prefix does not match a longer number", async () => {
+      const store = make(makeClock());
+      await store.put(encodeKey(["user", 1, "x"]), 1, null);
+      await store.put(encodeKey(["user", 12]), 2, null);
+      expect(await keysOf(store.keysWithPrefix(childrenOf(["user", 1])))).toEqual([encodeKey(["user", 1, "x"])]);
+    });
+
+    it("keysWithPrefix of the root yields every live key", async () => {
+      const store = make(makeClock());
+      await store.put(encodeKey(["a", 1]), 1, null);
+      await store.put(encodeKey(["b"]), 2, null);
+      expect(await keysOf(store.keysWithPrefix("["))).toEqual([encodeKey(["a", 1]), encodeKey(["b"])].sort());
+    });
+
+    it("keysWithPrefix does not yield a forgotten key", async () => {
+      const store = make(makeClock());
+      await store.put(encodeKey(["user", 1]), 1, null);
+      await store.forget(encodeKey(["user", 1]));
+      expect(await keysOf(store.keysWithPrefix(childrenOf(["user"])))).toEqual([]);
+    });
+
+    it("keysWithPrefix yields an overwritten key once", async () => {
+      const store = make(makeClock());
+      await store.put(encodeKey(["user", 1]), 1, null);
+      await store.put(encodeKey(["user", 1]), 2, null);
+      expect(await keysOf(store.keysWithPrefix(childrenOf(["user"])))).toEqual([encodeKey(["user", 1])]);
+      expect(await keysOf(store.keysWithPrefix(encodeKey(["user", 1])))).toEqual([encodeKey(["user", 1])]);
+    });
+
+    timed(
+      "keysWithPrefix skips expired keys",
+      async () => {
+        const clock = makeClock();
+        const store = make(clock);
+        await store.put(encodeKey(["user", 1]), 1, 1_000);
+        await store.put(encodeKey(["user", 2]), 2, null);
+        clock.advance(1_000);
+        expect(await keysOf(store.keysWithPrefix(childrenOf(["user"])))).toEqual([encodeKey(["user", 2])]);
+      },
+      async () => {
+        const store = make(makeClock());
+        await store.put(encodeKey(["user", 1]), 1, 300);
+        await store.put(encodeKey(["user", 2]), 2, null);
+        await wait(600);
+        expect(await keysOf(store.keysWithPrefix(childrenOf(["user"])))).toEqual([encodeKey(["user", 2])]);
       },
     );
   });

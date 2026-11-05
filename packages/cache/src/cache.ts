@@ -1,5 +1,5 @@
 import type { Store } from "./contracts.ts";
-import { decodeKey, encodeKey, type Key, type KeyInput, matchKey, normalizeKey } from "./keys.ts";
+import { decodeKey, encodeKey, invalidationPrefixes, type Key, type KeyInput, matchKey, normalizeKey } from "./keys.ts";
 import { assertSerializable } from "./values.ts";
 
 export interface SetOptions {
@@ -425,19 +425,23 @@ export class Cache<S extends Store = Store> {
 
   async invalidate(filter: InvalidateFilter, options: InvalidateOptions = {}): Promise<number> {
     const prefix = this.#scope.prefix;
-    const relative = (key: Key): Key => key.slice(prefix.length);
-    const matches = (key: Key): boolean => {
-      if (!matchKey(prefix, key)) return false;
-      if (typeof filter === "object" && !Array.isArray(filter) && "predicate" in filter) {
-        return filter.predicate(relative(key));
-      }
-      return matchKey([...prefix, ...normalizeKey(filter as KeyInput)], key, options);
-    };
-
     const doomed: { stored: string; key: Key }[] = [];
-    for await (const { key: stored } of this.#store.entries()) {
-      const key = decodeKey(stored);
-      if (key && matches(key)) doomed.push({ stored, key });
+    if (typeof filter === "object" && !Array.isArray(filter) && "predicate" in filter) {
+      // Predicate filters cannot use the prefix index: full scan of the store (documented).
+      const relative = (key: Key): Key => key.slice(prefix.length);
+      for await (const { key: stored } of this.#store.entries()) {
+        const key = decodeKey(stored);
+        if (key && matchKey(prefix, key) && filter.predicate(relative(key))) doomed.push({ stored, key });
+      }
+    } else {
+      // Array filters: visit only the index prefixes that cover the matches (O(matches)). matchKey still decides.
+      const full = [...prefix, ...normalizeKey(filter as KeyInput)];
+      for (const indexPrefix of invalidationPrefixes(full, options.exact === true)) {
+        for await (const stored of this.#store.keysWithPrefix(indexPrefix)) {
+          const key = decodeKey(stored);
+          if (key && matchKey(full, key, options)) doomed.push({ stored, key });
+        }
+      }
     }
     let removed = 0;
     for (const { stored, key } of doomed) {

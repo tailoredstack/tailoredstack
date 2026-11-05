@@ -3,6 +3,7 @@ import { randomUUID } from "node:crypto";
 import { fileURLToPath } from "node:url";
 import { Redis } from "ioredis";
 import { afterAll, describe, expect, inject, it } from "vitest";
+import { Cache, RedisStore } from "../src/index.ts";
 
 // Cross-process proof: each operation runs in a real child process sharing only Redis.
 const url = inject("redisUrl");
@@ -46,6 +47,20 @@ async function waitFor(check: () => Promise<boolean>, timeoutMs = 5_000): Promis
     await sleep(20);
   }
 }
+
+describe("cross-process invalidation (Redis)", () => {
+  it("invalidate racing a writer in another process leaves no matching keys behind", async () => {
+    const prefix = `coord:${randomUUID()}:`;
+    const [writer, invalidator] = await Promise.all([
+      run(prefix, "jobs-write", "200"),
+      run(prefix, "jobs-invalidate-loop"),
+    ]);
+    expect(writer.ok && invalidator.ok).toBe(true);
+    const fresh = new Cache(new RedisStore({ client, prefix }));
+    expect(await fresh.invalidate(["jobs"])).toBe(0);
+    expect(await fresh.get(["jobs", 0])).toBeUndefined();
+  });
+});
 
 describe("cross-process locks (Redis)", () => {
   it("two processes never hold the same lock at once", async () => {

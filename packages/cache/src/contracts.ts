@@ -21,4 +21,9 @@ export interface Store {
   extendIf(key: string, expected: unknown, ttlMs: number): Promise<boolean>;
   /** Live (unexpired) entries only. */
   entries(): AsyncIterable<{ key: string; value: unknown }>;
+  /**
+   * Stored keys that start with `prefix` and are live. Cache.invalidate passes only encodeKey-shaped prefixes: an
+   * exact key (ends in "]") or a children prefix (ends in ","). Must cost O(matches), not O(store).
+   */
+  keysWithPrefix(prefix: string): AsyncIterable<string>;
 }

@@ -43,6 +43,22 @@ async function main(): Promise<unknown> {
       await client.set(`${prefix}crashed`, String(process.pid));
       return new Promise(() => {});
     }
+    case "jobs-write": {
+      // Writes `arg` keys under ["jobs", n], then marks the writer done in Redis.
+      for (let n = 0; n < Number(arg); n++) await cache.set(["jobs", n], n);
+      await client.set(`${prefix}writer-done`, "1");
+      return "written";
+    }
+    case "jobs-invalidate-loop": {
+      // Invalidates ["jobs"] while the writer runs, then once more after it is done. Polls Redis state, no sleeps.
+      let removed = 0;
+      while ((await client.exists(`${prefix}writer-done`)) === 0) {
+        removed += await cache.invalidate(["jobs"]);
+        await sleep(5);
+      }
+      removed += await cache.invalidate(["jobs"]);
+      return removed;
+    }
     case "lock-try": {
       return cache.withoutOverlapping(["job"], () => "got-it", { waitFor: 0 });
     }
