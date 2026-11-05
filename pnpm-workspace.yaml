@@ -1,2 +1,8 @@
 packages:
   - "packages/*"
+allowBuilds:
+  cpu-features: false
+  protobufjs: false
+  ssh2: false
+overrides:
+  glob: ">=14.0.2"
