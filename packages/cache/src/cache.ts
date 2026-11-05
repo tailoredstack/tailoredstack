@@ -262,7 +262,7 @@ export class Cache<S extends Store = Store> {
       await this.set(key, value, setOptions);
       return value;
     };
-    if (!lock) return fill();
+    if (!lock) return this.#singleFlight(this.#stored(key), fill);
     // Under the lock, re-read: a cached null is a value, so only undefined means a miss.
     return this.withoutOverlapping(
       key,
