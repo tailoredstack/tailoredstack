@@ -178,6 +178,11 @@ export class RedisStore implements Store {
       if (error instanceof Error && error.message.includes("safe integer range")) {
         throw new RangeError(`increment of "${key}" by ${by} would leave the safe integer range`);
       }
+      // Redis rejects INCRBY on a non-integer value with its own error. Memory and sqlite throw TypeError for
+      // the same case, so map it to the same type and message.
+      if (error instanceof Error && error.message.includes("not an integer")) {
+        throw new TypeError(`Cache value at "${key}" is not an integer`);
+      }
       throw error;
     }
   }
