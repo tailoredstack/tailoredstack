@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 import { isTaggable, type Store, type TaggableStore } from "./contracts.ts";
 import { UnsupportedError } from "./errors.ts";
 import { decodeKey, encodeKey, type Key, type KeyInput, matchKey, normalizeKey } from "./keys.ts";
+import { assertSerializable } from "./values.ts";
 
 export interface SetOptions {
   /** Milliseconds until expiry. A number, or a function of the value. Omit for the chained default; if none, no expiry. */
@@ -188,7 +189,7 @@ export class Cache<S extends Store = Store> {
   }
 
   #assertSettable(value: unknown): void {
-    if (value === undefined) throw new TypeError("Cannot cache undefined; use delete() or return null");
+    assertSerializable(value);
   }
 
   /** Unwraps flexible envelopes; plain values pass through. */
@@ -246,6 +247,8 @@ export class Cache<S extends Store = Store> {
   }
 
   async putMany(entries: [KeyInput, unknown][], options?: SetOptions): Promise<void> {
+    // Validate the whole batch first so a bad entry does not leave earlier entries written.
+    for (const [, value] of entries) this.#assertSettable(value);
     for (const [key, value] of entries) await this.set(key, value, options);
   }
 
