@@ -15,8 +15,8 @@ afterAll(async () => {
   client.disconnect();
 });
 
-// Redis expiry runs on the server clock, so time-travel tests are skipped; expiry is tested with real waits below.
-storeContract("RedisStore", () => freshStore(), { timeTravel: false });
+// Redis expiry runs on the server clock, so TTL cases run in real time (short TTLs, real waits).
+storeContract("RedisStore", () => freshStore(), { timing: "real-time" });
 
 describe("RedisStore real-time behavior", () => {
   it("expires a key after its TTL", async () => {

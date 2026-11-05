@@ -185,8 +185,8 @@ import { storeContract } from "@tailoredstack/cache/testing";
 import { MyStore } from "./my-store.ts";
 
 storeContract("MyStore", (clock) => new MyStore({ now: clock.now }));
-// For drivers that own their clock (like Redis server time), skip time-travel tests:
-// storeContract("MyStore", () => new MyStore(), { timeTravel: false });
+// For drivers that own their clock (like Redis server time), run TTL cases in real time:
+// storeContract("MyStore", () => new MyStore(), { timing: "real-time" });
 ```
 
 `@tailoredstack/cache/testing` needs `vitest` as the test runner.
