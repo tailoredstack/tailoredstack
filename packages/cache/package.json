@@ -4,7 +4,6 @@
   "description": "One typed cache API over pluggable stores: memory, sqlite, redis. TanStack-style keys, tags, locks.",
   "type": "module",
   "license": "ISC",
-  "private": true,
   "sideEffects": false,
   "exports": {
     ".": {
@@ -19,6 +18,10 @@
       "types": "./dist/testing/index.d.ts",
       "default": "./dist/testing/index.js"
     }
+  },
+  "publishConfig": {
+    "registry": "https://npm.pkg.github.com",
+    "access": "public"
   },
   "files": [
     "dist"

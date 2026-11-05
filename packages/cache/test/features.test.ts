@@ -1,4 +1,4 @@
-import { describe, it, expect } from "vitest";
+import { describe, expect, it } from "vitest";
 import { Cache, LockTimeoutError } from "../src/cache.ts";
 import { MemoryStore } from "../src/drivers/memory.ts";
 import { makeClock } from "../src/testing/index.ts";
@@ -25,7 +25,13 @@ describe("bulk operations", () => {
 
   it("putMany writes every entry with a shared ttl", async () => {
     const { clock, cache } = setup();
-    await cache.putMany([[["a"], 1], [["b"], 2]], { ttl: 1000 });
+    await cache.putMany(
+      [
+        [["a"], 1],
+        [["b"], 2],
+      ],
+      { ttl: 1000 },
+    );
     expect(await cache.get(["a"])).toBe(1);
     clock.advance(1000);
     expect(await cache.get(["a"])).toBeUndefined();
@@ -239,9 +245,7 @@ describe("flexible (stale-while-revalidate)", () => {
       await sleep(20);
       return `v${n}`;
     };
-    const results = await Promise.all(
-      Array.from({ length: 5 }, () => cache.flexible(["k"], [1000, 1000], compute)),
-    );
+    const results = await Promise.all(Array.from({ length: 5 }, () => cache.flexible(["k"], [1000, 1000], compute)));
     expect(n).toBe(1);
     expect(new Set(results).size).toBe(1);
   });

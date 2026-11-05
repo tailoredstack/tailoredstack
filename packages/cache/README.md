@@ -20,7 +20,7 @@ import { Cache, MemoryStore } from "@tailoredstack/cache";
 const cache = new Cache(new MemoryStore());
 
 await cache.set(["user", 1], { name: "Ada" }, { ttl: 60_000 }); // ms; omit ttl = no expiry
-await cache.get<User>(["user", 1]);                              // User | undefined
+await cache.get<User>(["user", 1]); // User | undefined
 await cache.getOrSet(["user", 2], () => loadUser(2), { ttl: 60_000 });
 await cache.delete(["user", 1]);
 ```
@@ -39,7 +39,7 @@ Invalid segments throw `TypeError`: `undefined`, `NaN`, `Infinity`, functions, b
 
 ```ts
 const users = cache.prefix(["user"]).ttl(5 * 60_000);
-await users.set([1], user);          // stored at ["user", 1], expires in 5 minutes
+await users.set([1], user); // stored at ["user", 1], expires in 5 minutes
 await users.get<User>([1]);
 await cache.ttl(30_000).set("tmp", value);
 ```
@@ -49,11 +49,11 @@ await cache.ttl(30_000).set("tmp", value);
 `invalidate()` follows TanStack Query's matching rules:
 
 ```ts
-await cache.invalidate(["user"]);                       // partial: ["user", 1], ["user", 1, "posts"], ...
-await cache.invalidate(["user", { page: 1 }]);          // partial object match
-await cache.invalidate(["user", 1], { exact: true });   // only ["user", 1]
+await cache.invalidate(["user"]); // partial: ["user", 1], ["user", 1, "posts"], ...
+await cache.invalidate(["user", { page: 1 }]); // partial object match
+await cache.invalidate(["user", 1], { exact: true }); // only ["user", 1]
 await cache.invalidate({ predicate: (key) => key[0] === "post" });
-await cache.clear();                                     // invalidate([]): everything in this scope
+await cache.clear(); // invalidate([]): everything in this scope
 ```
 
 `invalidate` scans every entry in the store, so it costs O(N). Use one `Cache` per store, and use tags (below) when you invalidate often on Redis.
@@ -73,11 +73,17 @@ Each returns the fallback when the stored value has the wrong type.
 ## Bulk, counters, and presence
 
 ```ts
-await cache.many([["a"], ["b"]]);             // [value | undefined, ...]
-await cache.putMany([[["a"], 1], [["b"], 2]], { ttl: 60_000 });
-await cache.deleteMultiple([["a"], ["b"]]);   // number removed
+await cache.many([["a"], ["b"]]); // [value | undefined, ...]
+await cache.putMany(
+  [
+    [["a"], 1],
+    [["b"], 2],
+  ],
+  { ttl: 60_000 },
+);
+await cache.deleteMultiple([["a"], ["b"]]); // number removed
 await cache.add(["once"], value, { ttl: 1000 }); // true only if absent
-await cache.touch(["once"], 5000);            // extend ttl; false if missing
+await cache.touch(["once"], 5000); // extend ttl; false if missing
 await cache.increment(["hits"], 1);
 await cache.decrement(["hits"], 1);
 await cache.has(["x"]);
@@ -89,7 +95,7 @@ await cache.missing(["x"]);
 ## `getOrSet` with a TTL function
 
 ```ts
-await cache.getOrSet(["report"], buildReport, { ttl: (r) => r.isFinal ? 86_400_000 : 60_000 });
+await cache.getOrSet(["report"], buildReport, { ttl: (r) => (r.isFinal ? 86_400_000 : 60_000) });
 ```
 
 ## Stale-while-revalidate: `flexible`
@@ -109,7 +115,7 @@ const report = await cache.flexible(["report"], [60_000, 3_600_000], () => build
 ```ts
 // Only one caller runs at a time for this key. Waits up to waitFor ms, else LockTimeoutError.
 await cache.withoutOverlapping(["import", "org:1"], () => runImport(), {
-  lockFor: 30_000,  // lock expires after this, so a crashed holder can't block forever
+  lockFor: 30_000, // lock expires after this, so a crashed holder can't block forever
   waitFor: 5_000,
 });
 
@@ -142,7 +148,7 @@ const cache = new Cache(new RedisStore({ client: redis }));
 
 await cache.tags(["user", "org:1"]).set(["profile", 1], profile, { ttl: 300_000 });
 await cache.tags(["user", "org:1"]).get(["profile", 1]);
-await cache.tags(["user"]).flush();   // every item tagged "user" becomes unreachable
+await cache.tags(["user"]).flush(); // every item tagged "user" becomes unreachable
 ```
 
 Tags are a compile-time capability. `tags()` is only callable on a `Cache<TaggableStore>`, so `new Cache(new MemoryStore()).tags(...)` is a type error. Untyped JS callers get an `UnsupportedError` at runtime.
@@ -161,8 +167,8 @@ import { Redis } from "ioredis";
 import Database from "better-sqlite3"; // or node:sqlite
 import { Cache, MemoryStore, SqliteStore, RedisStore } from "@tailoredstack/cache";
 
-new Cache(new MemoryStore());                                    // in process, lost on restart
-new Cache(new SqliteStore({ path: "./cache.db" }));              // file, single host, no server
+new Cache(new MemoryStore()); // in process, lost on restart
+new Cache(new SqliteStore({ path: "./cache.db" })); // file, single host, no server
 new Cache(new RedisStore({ client: new Redis(url), prefix: "app:" })); // shared; works with Valkey
 ```
 

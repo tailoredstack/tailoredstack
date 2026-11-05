@@ -1,4 +1,4 @@
-import { describe, it, expect } from "vitest";
+import { describe, expect, it } from "vitest";
 import { encodeKey, matchKey } from "../src/keys.ts";
 
 describe("encodeKey", () => {
@@ -7,9 +7,7 @@ describe("encodeKey", () => {
   });
 
   it("is stable across nested object key order", () => {
-    expect(encodeKey([{ x: { a: 1, b: [{ c: 1, d: 2 }] } }])).toBe(
-      encodeKey([{ x: { b: [{ d: 2, c: 1 }], a: 1 } }]),
-    );
+    expect(encodeKey([{ x: { a: 1, b: [{ c: 1, d: 2 }] } }])).toBe(encodeKey([{ x: { b: [{ d: 2, c: 1 }], a: 1 } }]));
   });
 
   it("does not collide on separators inside segments", () => {

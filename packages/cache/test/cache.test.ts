@@ -1,4 +1,4 @@
-import { describe, it, expect } from "vitest";
+import { describe, expect, it } from "vitest";
 import { Cache } from "../src/cache.ts";
 import { MemoryStore } from "../src/drivers/memory.ts";
 import { makeClock } from "../src/testing/index.ts";

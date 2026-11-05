@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto";
 import { isTaggable, type Store, type TaggableStore } from "./contracts.ts";
 import { UnsupportedError } from "./errors.ts";
-import { decodeKey, encodeKey, matchKey, normalizeKey, type Key, type KeyInput } from "./keys.ts";
+import { decodeKey, encodeKey, type Key, type KeyInput, matchKey, normalizeKey } from "./keys.ts";
 
 export interface SetOptions {
   /** Milliseconds until expiry. A number, or a function of the value. Omit for the chained default; if none, no expiry. */
@@ -98,7 +98,11 @@ export class Cache<S extends Store = Store> {
   }
 
   #derive(scope: Scope): Cache<S> {
-    return new Cache<S>(this.#store, {}, scope, { listeners: this.#listeners, now: this.#now, inflight: this.#inflight });
+    return new Cache<S>(this.#store, {}, scope, {
+      listeners: this.#listeners,
+      now: this.#now,
+      inflight: this.#inflight,
+    });
   }
 
   /** Scope every key under extra leading segments. */
@@ -126,7 +130,8 @@ export class Cache<S extends Store = Store> {
 
   /** Rotate every tag in this scope. Tagged items become unreachable; untagged keys are unaffected. */
   async flush(this: Cache<TaggableStore>): Promise<void> {
-    if (this.#scope.tags.length === 0) throw new UnsupportedError("flush()", "an untagged cache; use tags([...]).flush()");
+    if (this.#scope.tags.length === 0)
+      throw new UnsupportedError("flush()", "an untagged cache; use tags([...]).flush()");
     for (const name of this.#scope.tags) await this.#store.rotateTag(name);
   }
 
@@ -159,7 +164,7 @@ export class Cache<S extends Store = Store> {
     if (this.#scope.tags.length === 0) return base;
     const store = this.#store as unknown as TaggableStore;
     const ids = await Promise.all(this.#scope.tags.map((name) => store.tagId(name)));
-    return createHash("sha1").update(ids.join("|")).digest("hex") + ":" + base;
+    return `${createHash("sha1").update(ids.join("|")).digest("hex")}:${base}`;
   }
 
   #ttlFor(value: unknown, options?: SetOptions): number | null {
@@ -292,7 +297,12 @@ export class Cache<S extends Store = Store> {
     const refresh = async (): Promise<T> => {
       const value = await compute();
       this.#assertSettable(value);
-      const envelope: FlexEnvelope = { [FLEX]: 1, v: value, freshUntil: this.#now() + freshMs, staleUntil: this.#now() + staleMs };
+      const envelope: FlexEnvelope = {
+        [FLEX]: 1,
+        v: value,
+        freshUntil: this.#now() + freshMs,
+        staleUntil: this.#now() + staleMs,
+      };
       await this.#store.put(stored, envelope, staleMs);
       this.#emit({ type: "write", key: this.#full(key) });
       return value;
@@ -332,7 +342,8 @@ export class Cache<S extends Store = Store> {
 
   /** At most `limit` callbacks run concurrently for `key`. Each slot is a lock with its own token. */
   async funnel<T>(key: KeyInput, options: FunnelOptions, callback: () => T | Promise<T>): Promise<T> {
-    if (!Number.isInteger(options.limit) || options.limit < 1) throw new RangeError(`limit must be a positive integer, got ${options.limit}`);
+    if (!Number.isInteger(options.limit) || options.limit < 1)
+      throw new RangeError(`limit must be a positive integer, got ${options.limit}`);
     const deadline = this.#now() + (options.waitFor ?? 0);
     const base = `funnel:${this.#stored(key)}`;
     for (;;) {

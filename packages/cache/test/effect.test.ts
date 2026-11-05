@@ -1,8 +1,8 @@
-import { describe, it, expect } from "vitest";
 import { Effect, Exit } from "effect";
+import { describe, expect, it } from "vitest";
 import { Cache } from "../src/cache.ts";
-import { MemoryStore } from "../src/drivers/memory.ts";
 import type { Store } from "../src/contracts.ts";
+import { MemoryStore } from "../src/drivers/memory.ts";
 import { EffectCache } from "../src/effect/index.ts";
 
 const make = () => new EffectCache(new Cache(new MemoryStore()));
@@ -99,7 +99,13 @@ describe("EffectCache funnel", () => {
 
   it("funnel exhaustion surfaces as LockTimeoutError, not a throw", async () => {
     const c = make();
-    const holder = Effect.runPromise(c.funnel(["api"], { limit: 1 }, Effect.promise(() => new Promise((r) => setTimeout(() => r(1), 200)))));
+    const holder = Effect.runPromise(
+      c.funnel(
+        ["api"],
+        { limit: 1 },
+        Effect.promise(() => new Promise((r) => setTimeout(() => r(1), 200))),
+      ),
+    );
     await new Promise((r) => setTimeout(r, 20));
     const exit = await Effect.runPromiseExit(c.funnel(["api"], { limit: 1, waitFor: 10 }, Effect.succeed(2)));
     expect(Exit.isFailure(exit)).toBe(true);

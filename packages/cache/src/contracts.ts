@@ -31,5 +31,8 @@ export interface TaggableStore extends Store {
 }
 
 export function isTaggable(store: Store): store is TaggableStore {
-  return typeof (store as Partial<TaggableStore>).tagId === "function" && typeof (store as Partial<TaggableStore>).rotateTag === "function";
+  return (
+    typeof (store as Partial<TaggableStore>).tagId === "function" &&
+    typeof (store as Partial<TaggableStore>).rotateTag === "function"
+  );
 }

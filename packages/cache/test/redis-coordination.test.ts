@@ -1,8 +1,8 @@
-import { describe, it, expect, afterAll } from "vitest";
-import { Redis } from "ioredis";
 import { spawn } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { fileURLToPath } from "node:url";
+import { Redis } from "ioredis";
+import { afterAll, describe, expect, it } from "vitest";
 
 // Cross-process proof: each operation runs in a real child process sharing only Redis.
 const url = process.env.REDIS_URL ?? "redis://127.0.0.1:6390";
@@ -15,7 +15,11 @@ afterAll(() => {
 
 function run(prefix: string, op: string, arg = ""): Promise<{ ok: boolean; result?: unknown; error?: string }> {
   return new Promise((resolve, reject) => {
-    const child = spawn(process.execPath, ["--experimental-strip-types", "--no-warnings", worker, url, prefix, op, arg], { stdio: ["ignore", "pipe", "pipe"] });
+    const child = spawn(
+      process.execPath,
+      ["--experimental-strip-types", "--no-warnings", worker, url, prefix, op, arg],
+      { stdio: ["ignore", "pipe", "pipe"] },
+    );
     let out = "";
     let err = "";
     child.stdout.on("data", (d) => (out += d));
@@ -57,7 +61,11 @@ describe("cross-process locks (Redis)", () => {
 
   it("a crashed holder's lock expires and another process can take it", async () => {
     const prefix = `coord:${randomUUID()}:`;
-    const child = spawn(process.execPath, ["--experimental-strip-types", "--no-warnings", worker, url, prefix, "lock-crash", "400"], { stdio: "ignore" });
+    const child = spawn(
+      process.execPath,
+      ["--experimental-strip-types", "--no-warnings", worker, url, prefix, "lock-crash", "400"],
+      { stdio: "ignore" },
+    );
     await sleep(150); // child has acquired the lock and is hanging inside it
     expect((await run(prefix, "lock-try")).ok).toBe(false);
     child.kill("SIGKILL"); // crash: no release runs

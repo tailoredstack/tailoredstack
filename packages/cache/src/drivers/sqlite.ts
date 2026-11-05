@@ -27,12 +27,8 @@ export class SqliteStore implements Store {
   constructor({ path, now = Date.now }: SqliteStoreOptions) {
     this.#db = new DatabaseSync(path);
     this.#now = now;
-    this.#db.exec(
-      "CREATE TABLE IF NOT EXISTS cache (key TEXT PRIMARY KEY, value TEXT NOT NULL, expires_at INTEGER)",
-    );
-    this.#select = this.#db.prepare(
-      "SELECT value FROM cache WHERE key = ? AND (expires_at IS NULL OR expires_at > ?)",
-    );
+    this.#db.exec("CREATE TABLE IF NOT EXISTS cache (key TEXT PRIMARY KEY, value TEXT NOT NULL, expires_at INTEGER)");
+    this.#select = this.#db.prepare("SELECT value FROM cache WHERE key = ? AND (expires_at IS NULL OR expires_at > ?)");
     this.#row = this.#db.prepare("SELECT value, expires_at FROM cache WHERE key = ?");
     this.#upsert = this.#db.prepare(
       "INSERT INTO cache (key, value, expires_at) VALUES (?, ?, ?) " +
@@ -40,9 +36,7 @@ export class SqliteStore implements Store {
     );
     this.#addIgnore = this.#db.prepare("INSERT OR IGNORE INTO cache (key, value, expires_at) VALUES (?, ?, ?)");
     this.#purge = this.#db.prepare("DELETE FROM cache WHERE key = ? AND expires_at <= ?");
-    this.#forget = this.#db.prepare(
-      "DELETE FROM cache WHERE key = ? AND (expires_at IS NULL OR expires_at > ?)",
-    );
+    this.#forget = this.#db.prepare("DELETE FROM cache WHERE key = ? AND (expires_at IS NULL OR expires_at > ?)");
     this.#touch = this.#db.prepare(
       "UPDATE cache SET expires_at = ? WHERE key = ? AND (expires_at IS NULL OR expires_at > ?)",
     );

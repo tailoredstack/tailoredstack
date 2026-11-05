@@ -1,6 +1,6 @@
-import { describe, it, expect, afterAll } from "vitest";
-import { Redis } from "ioredis";
 import { randomUUID } from "node:crypto";
+import { Redis } from "ioredis";
+import { afterAll, describe, expect, it } from "vitest";
 import { RedisStore } from "../src/drivers/redis.ts";
 import { storeContract } from "../src/testing/index.ts";
 

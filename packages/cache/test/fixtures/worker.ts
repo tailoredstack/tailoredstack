@@ -11,13 +11,17 @@ async function main(): Promise<unknown> {
   switch (op) {
     case "lock-hold": {
       // Acquire, record entry/exit timestamps in Redis, hold for `arg` ms, release.
-      return cache.withoutOverlapping(["job"], async () => {
-        const t0 = Date.now();
-        await client.rpush(`${prefix}trace`, `enter:${process.pid}:${t0}`);
-        await sleep(Number(arg));
-        await client.rpush(`${prefix}trace`, `exit:${process.pid}:${Date.now()}`);
-        return "held";
-      }, { lockFor: 5_000, waitFor: 10_000 });
+      return cache.withoutOverlapping(
+        ["job"],
+        async () => {
+          const t0 = Date.now();
+          await client.rpush(`${prefix}trace`, `enter:${process.pid}:${t0}`);
+          await sleep(Number(arg));
+          await client.rpush(`${prefix}trace`, `exit:${process.pid}:${Date.now()}`);
+          return "held";
+        },
+        { lockFor: 5_000, waitFor: 10_000 },
+      );
     }
     case "lock-crash": {
       // Take the lock and hang forever inside it. The parent SIGKILLs us: a real crash, no release.
@@ -45,11 +49,11 @@ async function main(): Promise<unknown> {
 
 main()
   .then((result) => {
-    process.stdout.write(JSON.stringify({ ok: true, result }) + "\n");
+    process.stdout.write(`${JSON.stringify({ ok: true, result })}\n`);
     client.disconnect();
   })
   .catch((err: unknown) => {
-    process.stdout.write(JSON.stringify({ ok: false, error: err instanceof Error ? err.name : String(err) }) + "\n");
+    process.stdout.write(`${JSON.stringify({ ok: false, error: err instanceof Error ? err.name : String(err) })}\n`);
     client.disconnect();
     process.exitCode = 1;
   });

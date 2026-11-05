@@ -1,6 +1,6 @@
-import type { Redis } from "ioredis";
 import { randomUUID } from "node:crypto";
-import type { Store, TaggableStore } from "../contracts.ts";
+import type { Redis } from "ioredis";
+import type { TaggableStore } from "../contracts.ts";
 
 export interface RedisStoreOptions {
   client: Redis;
@@ -9,8 +9,7 @@ export interface RedisStoreOptions {
 }
 
 // Atomic compare-and-delete: a holder whose lock expired cannot delete its successor's lock.
-const FORGET_IF =
-  "if redis.call('GET', KEYS[1]) == ARGV[1] then return redis.call('DEL', KEYS[1]) else return 0 end";
+const FORGET_IF = "if redis.call('GET', KEYS[1]) == ARGV[1] then return redis.call('DEL', KEYS[1]) else return 0 end";
 
 const escapeGlob = (s: string) => s.replace(/[*?[\]\\]/g, "\\$&");
 
@@ -92,7 +91,7 @@ export class RedisStore implements TaggableStore {
   // Tag ids live outside the entry namespace (no entries() leakage) and never expire.
   #tagKey(name: string): string {
     // Cache keys are JSON arrays (start with "["), so this namespace can never collide with an entry.
-    return this.#prefix + "#tag:" + name;
+    return `${this.#prefix}#tag:${name}`;
   }
 
   async tagId(name: string): Promise<string> {
@@ -111,12 +110,13 @@ export class RedisStore implements TaggableStore {
   async *entries(): AsyncGenerator<{ key: string; value: unknown }> {
     const stream = this.#client.scanStream({ match: `${escapeGlob(this.#prefix)}*`, count: 500 });
     for await (const batch of stream) {
-      const keys = (batch as string[]).filter((k) => !k.startsWith(this.#prefix + "#tag:"));
+      const keys = (batch as string[]).filter((k) => !k.startsWith(`${this.#prefix}#tag:`));
       if (keys.length === 0) continue;
       const raws = await this.#client.mget(...keys);
-      for (let i = 0; i < keys.length; i++) {
-        if (raws[i] === null) continue; // expired between SCAN and MGET
-        yield { key: keys[i]!.slice(this.#prefix.length), value: JSON.parse(raws[i]!) };
+      for (const [i, key] of keys.entries()) {
+        const raw = raws[i];
+        if (typeof raw !== "string") continue; // expired between SCAN and MGET
+        yield { key: key.slice(this.#prefix.length), value: JSON.parse(raw) };
       }
     }
   }

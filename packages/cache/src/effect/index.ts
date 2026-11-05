@@ -1,7 +1,14 @@
 import { Data, Effect } from "effect";
-import { Cache, type InvalidateFilter, type InvalidateOptions, type SetOptions } from "../cache.ts";
+import {
+  type Cache,
+  type FunnelOptions,
+  type InvalidateFilter,
+  type InvalidateOptions,
+  type LockOptions,
+  LockTimeoutError,
+  type SetOptions,
+} from "../cache.ts";
 import type { KeyInput } from "../keys.ts";
-import { LockTimeoutError, type FunnelOptions, type LockOptions } from "../cache.ts";
 
 export class CacheError extends Data.TaggedError("CacheError")<{
   readonly operation: string;
@@ -68,7 +75,7 @@ export class EffectCache {
   }
 
   /** `compute` runs only on a miss or past the stale window. Its failure is a typed failure, not a throw. */
-  flexible<A, E, R>(
+  flexible<A, E, _R>(
     key: KeyInput,
     windows: [number, number],
     compute: Effect.Effect<A, E, never>,
@@ -79,19 +86,20 @@ export class EffectCache {
     }) as Effect.Effect<A, E | CacheError, never>;
   }
 
-  withoutOverlapping<A, E, R>(
+  withoutOverlapping<A, E, _R>(
     key: KeyInput,
     callback: Effect.Effect<A, E, never>,
     options?: LockOptions,
   ): Effect.Effect<A, E | CacheError | LockTimeoutError, never> {
     return Effect.tryPromise({
       try: () => this.#cache.withoutOverlapping(key, () => Effect.runPromise(callback), options),
-      catch: (cause) => (cause instanceof LockTimeoutError ? cause : new CacheError({ operation: "withoutOverlapping", cause })),
+      catch: (cause) =>
+        cause instanceof LockTimeoutError ? cause : new CacheError({ operation: "withoutOverlapping", cause }),
     }) as Effect.Effect<A, E | CacheError | LockTimeoutError, never>;
   }
 
   /** At most `limit` Effects run concurrently for `key`. Exhaustion past `waitFor` is a LockTimeoutError. */
-  funnel<A, E, R>(
+  funnel<A, E, _R>(
     key: KeyInput,
     options: FunnelOptions,
     callback: Effect.Effect<A, E, never>,
