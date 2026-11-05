@@ -50,6 +50,8 @@ jobs:
         run: pnpm build
       - name: Test ✅
         run: pnpm --filter @tailoredstack/cache test
+      - name: E2E against real stores 🧪
+        run: pnpm --filter @tailoredstack/cache test:e2e
       - name: Publish to GitHub Packages 🚀
         working-directory: packages/cache
         env:
