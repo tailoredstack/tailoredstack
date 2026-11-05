@@ -145,7 +145,7 @@ Coordination is per-store. For cross-process protection, use a shared store (Red
 
 ```ts
 const off = cache.on("miss", (e) => metrics.inc("cache.miss", { key: e.key }));
-// event types: "hit" | "miss" | "write" | "forget"
+// event types: "hit" | "miss" | "write" | "forget" | "release-failed"
 off();
 ```
 
