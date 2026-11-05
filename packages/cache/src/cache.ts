@@ -106,6 +106,12 @@ function toMs(ms: number): number {
   return Math.ceil(ms);
 }
 
+/** Validates lock durations before any lock is taken, so a bad option never leaves a lock or slot held. */
+function assertLockDurations(options: LockOptions): void {
+  if (options.lockFor !== undefined) toMs(options.lockFor);
+  if (options.maxHoldFor !== undefined) toMs(options.maxHoldFor);
+}
+
 function sleepFor(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
@@ -383,6 +389,7 @@ export class Cache<S extends Store = Store> {
   /** Run `callback` while holding an exclusive lock on `key`. Waits up to `waitFor` ms, else LockTimeoutError. */
   async withoutOverlapping<T>(key: KeyInput, callback: () => T | Promise<T>, options: LockOptions = {}): Promise<T> {
     assertWaitFor(options.waitFor);
+    assertLockDurations(options);
     const lockKey = `lock:${this.#stored(key)}`;
     const token = `${Math.random()}:${this.#now()}`;
     await this.#acquire(lockKey, token, options, this.#full(key));
@@ -394,6 +401,7 @@ export class Cache<S extends Store = Store> {
     if (!Number.isInteger(options.limit) || options.limit < 1)
       throw new RangeError(`limit must be a positive integer, got ${options.limit}`);
     assertWaitFor(options.waitFor);
+    assertLockDurations(options);
     const deadline = this.#now() + (options.waitFor ?? 0);
     const base = `funnel:${this.#stored(key)}`;
     for (;;) {
