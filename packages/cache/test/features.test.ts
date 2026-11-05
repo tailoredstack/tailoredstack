@@ -86,7 +86,7 @@ describe("touch and add", () => {
 describe("getOrSet with a ttl function", () => {
   it("derives ttl from the computed value", async () => {
     const { clock, cache } = setup();
-    await cache.getOrSet(["k"], () => 5, { ttl: (v) => v * 1000 });
+    await cache.getOrSet(["k"], () => 5, { ttl: (v) => (v as number) * 1000 });
     clock.advance(4999);
     expect(await cache.get(["k"])).toBe(5);
     clock.advance(1);
