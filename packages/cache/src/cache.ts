@@ -446,7 +446,8 @@ export class Cache<S extends Store = Store> {
     } finally {
       active = false;
       clearTimeout(timer);
-      await this.#store.forgetIf(lockKey, token);
+      // A failed release must not replace the callback's result or error. The lease then lapses at lockFor.
+      await this.#store.forgetIf(lockKey, token).catch(() => false);
     }
   }
 
