@@ -264,7 +264,13 @@ export class Cache<S extends Store = Store> {
       await this.set(key, value, setOptions);
       return value;
     };
-    if (!lock) return this.#singleFlight(this.#stored(key), fill);
+    if (!lock) {
+      // Callers share one compute only when they would store the same thing. A numeric ttl is part of that
+      // identity; a ttl function cannot be compared, so such calls run on their own.
+      const ttl = setOptions.ttl;
+      if (typeof ttl === "function") return fill();
+      return this.#singleFlight(`${this.#stored(key)}#ttl=${ttl ?? "none"}`, fill);
+    }
     // Under the lock, re-read: a cached null is a value, so only undefined means a miss.
     return this.withoutOverlapping(
       key,
