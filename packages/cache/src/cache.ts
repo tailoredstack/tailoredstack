@@ -61,6 +61,12 @@ function assertTtl(ttl: number): void {
   if (!Number.isFinite(ttl) || ttl <= 0) throw new RangeError(`ttl must be a positive finite number of ms, got ${ttl}`);
 }
 
+/** Drivers take whole milliseconds (Redis PX rejects fractions). Round up so a short ttl never becomes zero. */
+function toMs(ms: number): number {
+  assertTtl(ms);
+  return Math.ceil(ms);
+}
+
 function sleepFor(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
@@ -113,8 +119,7 @@ export class Cache<S extends Store = Store> {
 
   /** Default ttl (ms) for set/getOrSet on the returned Cache. */
   ttl(ms: number): Cache<S> {
-    assertTtl(ms);
-    return this.#derive({ ...this.#scope, ttl: ms });
+    return this.#derive({ ...this.#scope, ttl: toMs(ms) });
   }
 
   /**
@@ -170,9 +175,16 @@ export class Cache<S extends Store = Store> {
   #ttlFor(value: unknown, options?: SetOptions): number | null {
     const ttl = options?.ttl ?? this.#scope.ttl;
     if (ttl === null || ttl === undefined) return null;
-    const ms = typeof ttl === "function" ? ttl(value) : ttl;
-    assertTtl(ms);
-    return ms;
+    return toMs(typeof ttl === "function" ? ttl(value) : ttl);
+  }
+
+  /** Process-local dedup: concurrent callers for one stored key share one in-flight run. */
+  #singleFlight<T>(stored: string, run: () => Promise<T>): Promise<T> {
+    const pending = this.#inflight.get(stored);
+    if (pending) return pending as Promise<T>;
+    const started = run().finally(() => this.#inflight.delete(stored));
+    this.#inflight.set(stored, started);
+    return started;
   }
 
   #assertSettable(value: unknown): void {
@@ -238,8 +250,7 @@ export class Cache<S extends Store = Store> {
   }
 
   async touch(key: KeyInput, ttl: number): Promise<boolean> {
-    assertTtl(ttl);
-    return this.#store.touch(await this.#physical(key), ttl);
+    return this.#store.touch(await this.#physical(key), toMs(ttl));
   }
 
   /** Store only if absent. Returns true when stored. */
@@ -288,8 +299,8 @@ export class Cache<S extends Store = Store> {
    * the cached value and refreshes in the background; past that, computes synchronously.
    */
   async flexible<T>(key: KeyInput, [freshMs, staleMs]: [number, number], compute: () => T | Promise<T>): Promise<T> {
-    assertTtl(freshMs);
-    assertTtl(staleMs);
+    const fresh = toMs(freshMs);
+    const stale = toMs(staleMs);
     const stored = await this.#physical(key);
     const raw = await this.#store.get(stored);
     const now = this.#now();
@@ -300,10 +311,10 @@ export class Cache<S extends Store = Store> {
       const envelope: FlexEnvelope = {
         [FLEX]: 1,
         v: value,
-        freshUntil: this.#now() + freshMs,
-        staleUntil: this.#now() + staleMs,
+        freshUntil: this.#now() + fresh,
+        staleUntil: this.#now() + stale,
       };
-      await this.#store.put(stored, envelope, staleMs);
+      await this.#store.put(stored, envelope, stale);
       this.#emit({ type: "write", key: this.#full(key) });
       return value;
     };
@@ -315,17 +326,14 @@ export class Cache<S extends Store = Store> {
       }
       if (now < raw.staleUntil) {
         this.#emit({ type: "hit", key: this.#full(key) });
-        // Background refresh: failure keeps serving the stale value rather than throwing.
-        void refresh().catch(() => undefined);
+        // Background refresh shares the in-flight run, so concurrent stale hits recompute once.
+        // A failed refresh keeps serving the stale value rather than throwing.
+        void this.#singleFlight(stored, refresh).catch(() => undefined);
         return raw.v as T;
       }
     }
     this.#emit({ type: "miss", key: this.#full(key) });
-    const pending = this.#inflight.get(stored);
-    if (pending) return pending as Promise<T>;
-    const run = refresh().finally(() => this.#inflight.delete(stored));
-    this.#inflight.set(stored, run);
-    return run;
+    return this.#singleFlight(stored, refresh);
   }
 
   /** Run `callback` while holding an exclusive lock on `key`. Waits up to `waitFor` ms, else LockTimeoutError. */
@@ -350,7 +358,7 @@ export class Cache<S extends Store = Store> {
       for (let slot = 0; slot < options.limit; slot++) {
         const slotKey = `${base}:${slot}`;
         const token = `${Math.random()}:${this.#now()}`;
-        const got = await this.#store.add(slotKey, token, options.lockFor ?? 30_000);
+        const got = await this.#store.add(slotKey, token, toMs(options.lockFor ?? 30_000));
         if (got) {
           try {
             return await callback();
@@ -366,7 +374,7 @@ export class Cache<S extends Store = Store> {
 
   async #acquire(lockKey: string, token: string, options: LockOptions, fullKey: Key): Promise<void> {
     const deadline = this.#now() + (options.waitFor ?? 0);
-    const lockFor = options.lockFor ?? 30_000;
+    const lockFor = toMs(options.lockFor ?? 30_000);
     for (;;) {
       if (await this.#store.add(lockKey, token, lockFor)) return;
       if (this.#now() >= deadline) throw new LockTimeoutError(fullKey);
