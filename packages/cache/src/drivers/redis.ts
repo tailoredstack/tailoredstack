@@ -1,9 +1,27 @@
 import { randomUUID } from "node:crypto";
-import type { Redis } from "ioredis";
 import type { TaggableStore } from "../contracts.ts";
 
+/**
+ * The subset of a Redis client that RedisStore calls. Structural, so declarations never import the optional
+ * peer. A client from the usual Node Redis library satisfies it.
+ */
+export interface RedisClient {
+  get(key: string): Promise<unknown>;
+  mget(...keys: string[]): Promise<unknown[]>;
+  set(key: string, value: string, ...args: unknown[]): Promise<unknown>;
+  multi(): {
+    set(key: string, value: string, ...args: unknown[]): unknown;
+    exec(): Promise<unknown>;
+  };
+  incrby(key: string, increment: number): Promise<number>;
+  pexpire(key: string, ms: number): Promise<number>;
+  del(...keys: string[]): Promise<number>;
+  eval(script: string, numKeys: number, ...args: unknown[]): Promise<unknown>;
+  scanStream(options: { match: string; count: number }): AsyncIterable<unknown>;
+}
+
 export interface RedisStoreOptions {
-  client: Redis;
+  client: RedisClient;
   /** Namespace for every key, so entries() only sees this store's keys. */
   prefix?: string;
 }
@@ -14,7 +32,7 @@ const FORGET_IF = "if redis.call('GET', KEYS[1]) == ARGV[1] then return redis.ca
 const escapeGlob = (s: string) => s.replace(/[*?[\]\\]/g, "\\$&");
 
 export class RedisStore implements TaggableStore {
-  readonly #client: Redis;
+  readonly #client: RedisClient;
   readonly #prefix: string;
 
   constructor({ client, prefix = "cache:" }: RedisStoreOptions) {
@@ -26,8 +44,8 @@ export class RedisStore implements TaggableStore {
     return this.#prefix + key;
   }
 
-  #decode(raw: string | null): unknown {
-    return raw === null ? undefined : JSON.parse(raw);
+  #decode(raw: unknown): unknown {
+    return raw === null ? undefined : JSON.parse(raw as string);
   }
 
   async get(key: string): Promise<unknown> {

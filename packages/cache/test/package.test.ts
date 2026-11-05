@@ -28,6 +28,13 @@ describe("package.json contract", () => {
     expect(pkg.dependencies ?? {}).toEqual({});
   });
 
+  it("built declarations do not import ioredis (optional peer must not leak into types)", () => {
+    for (const file of ["dist/index.d.ts", "dist/drivers/redis.d.ts"]) {
+      const text = readFileSync(new URL(`../${file}`, import.meta.url), "utf8");
+      expect(text, file).not.toContain("from \"ioredis\"");
+    }
+  });
+
   it("description is not Laravel-branded", () => {
     expect(pkg.description).not.toMatch(/laravel/i);
   });
