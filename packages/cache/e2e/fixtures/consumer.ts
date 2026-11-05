@@ -5,8 +5,14 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Cache, MemoryStore, RedisStore, SqliteStore, type Store } from "@tailoredstack/cache";
 import { EffectCache } from "@tailoredstack/cache/effect";
+import type { storeContract } from "@tailoredstack/cache/testing";
 import { Effect } from "effect";
 import { Redis } from "ioredis";
+
+// Type-only: proves the ./testing export typechecks for a consumer that has vitest installed.
+type Contract = typeof storeContract;
+
+export type { Contract };
 
 // REDIS_URL points at whichever server container the harness started. BACKEND names it for the report.
 const url = process.env.REDIS_URL;
