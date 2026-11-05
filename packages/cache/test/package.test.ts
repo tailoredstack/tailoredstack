@@ -7,6 +7,7 @@ const pkg = JSON.parse(readFileSync(new URL("../package.json", import.meta.url),
   peerDependenciesMeta?: Record<string, { optional?: boolean }>;
   dependencies?: Record<string, string>;
   description: string;
+  engines?: Record<string, string>;
 };
 
 describe("package.json contract", () => {
@@ -33,6 +34,10 @@ describe("package.json contract", () => {
       const text = readFileSync(new URL(`../${file}`, import.meta.url), "utf8");
       expect(text, file).not.toContain('from "ioredis"');
     }
+  });
+
+  it("engines.node covers the first unflagged node:sqlite release (22.13.0)", () => {
+    expect(pkg.engines?.node).toBe(">=22.13.0");
   });
 
   it("description is not Laravel-branded", () => {
