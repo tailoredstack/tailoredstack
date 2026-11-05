@@ -26,6 +26,7 @@ export class SqliteStore implements Store {
 
   constructor({ path, now = Date.now }: SqliteStoreOptions) {
     this.#db = new DatabaseSync(path);
+    this.#db.exec("PRAGMA busy_timeout = 5000"); // wait for other processes' write locks instead of failing
     this.#now = now;
     this.#db.exec("CREATE TABLE IF NOT EXISTS cache (key TEXT PRIMARY KEY, value TEXT NOT NULL, expires_at INTEGER)");
     this.#select = this.#db.prepare("SELECT value FROM cache WHERE key = ? AND (expires_at IS NULL OR expires_at > ?)");
@@ -80,15 +81,26 @@ export class SqliteStore implements Store {
     return this.#adjust(key, -by);
   }
 
-  // Synchronous node:sqlite calls: no await between read and write, so no in-process interleaving.
+  // BEGIN IMMEDIATE takes the write lock before the read, so other processes cannot interleave read-modify-write.
   #adjust(key: string, by: number): number {
-    this.#purge.run(key, this.#now());
-    const row = this.#row.get(key) as Row | undefined;
-    const current: unknown = row ? JSON.parse(row.value) : 0;
-    if (!Number.isInteger(current)) throw new TypeError(`Cache value at "${key}" is not an integer`);
-    const next = (current as number) + by;
-    this.#upsert.run(key, JSON.stringify(next), row?.expires_at ?? null);
-    return next;
+    this.#db.exec("BEGIN IMMEDIATE");
+    try {
+      this.#purge.run(key, this.#now());
+      const row = this.#row.get(key) as Row | undefined;
+      const current: unknown = row ? JSON.parse(row.value) : 0;
+      if (!Number.isInteger(current)) throw new TypeError(`Cache value at "${key}" is not an integer`);
+      const next = (current as number) + by;
+      this.#upsert.run(key, JSON.stringify(next), row?.expires_at ?? null);
+      this.#db.exec("COMMIT");
+      return next;
+    } catch (err) {
+      this.#db.exec("ROLLBACK");
+      throw err;
+    }
+  }
+
+  close(): void {
+    this.#db.close();
   }
 
   async touch(key: string, ttlMs: number): Promise<boolean> {
