@@ -13,7 +13,8 @@ interface Row {
 
 // Exclusive upper bound of keys starting with `prefix`: last char + 1. Callers pass non-empty prefixes that end in
 // ASCII "]", "," or are "[" (see Cache.invalidate), so the bump stays inside one code unit and never overflows.
-const upperBound = (prefix: string) => prefix.slice(0, -1) + String.fromCharCode(prefix.charCodeAt(prefix.length - 1) + 1);
+const upperBound = (prefix: string) =>
+  prefix.slice(0, -1) + String.fromCharCode(prefix.charCodeAt(prefix.length - 1) + 1);
 
 const PREFIX_SQL = "SELECT key FROM cache WHERE key >= ? AND key < ? AND (expires_at IS NULL OR expires_at > ?)";
 
