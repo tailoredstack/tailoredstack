@@ -17,14 +17,25 @@ concurrency:
 jobs:
   release-please:
     runs-on: ubuntu-latest
+    env:
+      RELEASE_APP_ID: ${{ secrets.RELEASE_APP_ID }}
     outputs:
       releases_created: ${{ steps.release.outputs.releases_created }}
     steps:
+      # Release PRs opened with GITHUB_TOKEN do not trigger other workflows (CI, commitlint).
+      # A GitHub App token does, so it is used when the RELEASE_APP_* secrets exist.
+      - name: Create release app token 🔑
+        id: app-token
+        if: ${{ env.RELEASE_APP_ID != '' }}
+        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
+        with:
+          app-id: ${{ secrets.RELEASE_APP_ID }}
+          private-key: ${{ secrets.RELEASE_APP_PRIVATE_KEY }}
       - name: Release Please 🏷️
         id: release
         uses: googleapis/release-please-action@45996ed1f6d02564a971a2fa1b5860e934307cf7 # v5.0.0
         with:
-          token: ${{ secrets.GITHUB_TOKEN }}
+          token: ${{ steps.app-token.outputs.token || secrets.GITHUB_TOKEN }}
           config-file: release-please-config.json
           manifest-file: .release-please-manifest.json
 
