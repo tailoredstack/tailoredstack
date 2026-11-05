@@ -208,7 +208,7 @@ Every method returns an `Effect`. Driver and key failures become `CacheError`. L
 ## Errors
 
 - `TypeError`: invalid key segment, invalid value (`undefined`), non-integer `increment`.
-- `RangeError`: non-positive or non-finite `ttl`, empty `tags([])`, invalid funnel `limit`.
+- `RangeError`: non-positive or non-finite `ttl`, invalid funnel `limit`.
 - `LockTimeoutError`: `withoutOverlapping` or `funnel` could not acquire within `waitFor`.
 
 ## Testing your code
