@@ -1,7 +1,5 @@
-import { createHash } from "node:crypto";
-import { isTaggable, type Store, type TaggableStore } from "./contracts.ts";
-import { UnsupportedError } from "./errors.ts";
-import { decodeKey, encodeKey, type Key, type KeyInput, matchKey, normalizeKey } from "./keys.ts";
+import type { Store } from "./contracts.ts";
+import { decodeKey, encodeKey, invalidationPrefixes, type Key, type KeyInput, matchKey, normalizeKey } from "./keys.ts";
 import { assertSerializable } from "./values.ts";
 
 export interface SetOptions {
@@ -107,8 +105,6 @@ function sleepFor(ms: number): Promise<void> {
 interface Scope {
   prefix: Key;
   ttl: number | null;
-  /** Tag names when this is a tagged scope; empty for untagged caches. */
-  tags: readonly string[];
 }
 
 /**
@@ -126,7 +122,7 @@ export class Cache<S extends Store = Store> {
   constructor(
     store: S,
     options: CacheOptions = {},
-    scope: Scope = { prefix: [], ttl: null, tags: [] },
+    scope: Scope = { prefix: [], ttl: null },
     shared?: { listeners: Set<CacheListener>; now: () => number; inflight: Map<string, Promise<unknown>> },
   ) {
     this.#store = store;
@@ -155,24 +151,6 @@ export class Cache<S extends Store = Store> {
     return this.#derive({ ...this.#scope, ttl: toMs(ms) });
   }
 
-  /**
-   * Scope to a set of tags (Redis only). Writes go under a key that embeds the current tag ids; flush()
-   * rotates the ids so those items become unreachable and expire on their own TTL.
-   */
-  tags(this: Cache<TaggableStore>, names: readonly string[]): Cache<TaggableStore> {
-    if (names.length === 0) throw new RangeError("tags() needs at least one tag name");
-    if (!isTaggable(this.#store)) throw new UnsupportedError("tags()", (this.#store as object).constructor.name);
-    // Sorted so tag order never changes the namespace.
-    return this.#derive({ ...this.#scope, tags: [...new Set(names)].sort() }) as Cache<TaggableStore>;
-  }
-
-  /** Rotate every tag in this scope. Tagged items become unreachable; untagged keys are unaffected. */
-  async flush(this: Cache<TaggableStore>): Promise<void> {
-    if (this.#scope.tags.length === 0)
-      throw new UnsupportedError("flush()", "an untagged cache; use tags([...]).flush()");
-    for (const name of this.#scope.tags) await this.#store.rotateTag(name);
-  }
-
   /** Subscribe to hit/miss/write/forget events. Returns an unsubscribe function. */
   on(type: CacheEvent["type"], listener: CacheListener): () => void {
     const wrapped: CacheListener = (event) => {
@@ -194,15 +172,6 @@ export class Cache<S extends Store = Store> {
 
   #stored(key: KeyInput): string {
     return encodeKey(this.#full(key));
-  }
-
-  /** Physical key for a tagged item: sha1(tag ids) + ":" + key. Untagged caches use the plain key. */
-  async #physical(key: KeyInput): Promise<string> {
-    const base = this.#stored(key);
-    if (this.#scope.tags.length === 0) return base;
-    const store = this.#store as unknown as TaggableStore;
-    const ids = await Promise.all(this.#scope.tags.map((name) => store.tagId(name)));
-    return `${createHash("sha1").update(ids.join("|")).digest("hex")}:${base}`;
   }
 
   #ttlFor(value: unknown, options?: SetOptions): number | null {
@@ -230,7 +199,7 @@ export class Cache<S extends Store = Store> {
   }
 
   async get<T = unknown>(key: KeyInput): Promise<T | undefined> {
-    const raw = await this.#store.get(await this.#physical(key));
+    const raw = await this.#store.get(this.#stored(key));
     if (raw === undefined) {
       this.#emit({ type: "miss", key: this.#full(key) });
       return undefined;
@@ -240,33 +209,21 @@ export class Cache<S extends Store = Store> {
   }
 
   async has(key: KeyInput): Promise<boolean> {
-    return (await this.#store.get(await this.#physical(key))) !== undefined;
+    return (await this.#store.get(this.#stored(key))) !== undefined;
   }
 
   async missing(key: KeyInput): Promise<boolean> {
     return !(await this.has(key));
   }
 
-  /** Store under `tags`. Equal to `tags(names).set(key, value, { ttl })`. Only on a taggable store. */
-  set(
-    this: Cache<TaggableStore>,
-    key: KeyInput,
-    value: unknown,
-    options?: SetOptions & { tags?: readonly string[] },
-  ): Promise<void>;
-  set(key: KeyInput, value: unknown, options?: SetOptions & { tags?: never }): Promise<void>;
-  async set(key: KeyInput, value: unknown, options?: SetOptions & { tags?: readonly string[] }): Promise<void> {
-    if (options?.tags) {
-      const { tags, ...rest } = options;
-      return (this as unknown as Cache<TaggableStore>).tags(tags).set(key, value, rest);
-    }
+  async set(key: KeyInput, value: unknown, options?: SetOptions): Promise<void> {
     this.#assertSettable(value);
-    await this.#store.put(await this.#physical(key), escapeValue(value), this.#ttlFor(value, options));
+    await this.#store.put(this.#stored(key), escapeValue(value), this.#ttlFor(value, options));
     this.#emit({ type: "write", key: this.#full(key) });
   }
 
   async delete(key: KeyInput): Promise<boolean> {
-    const removed = await this.#store.forget(await this.#physical(key));
+    const removed = await this.#store.forget(this.#stored(key));
     if (removed) this.#emit({ type: "forget", key: this.#full(key) });
     return removed;
   }
@@ -277,29 +234,13 @@ export class Cache<S extends Store = Store> {
     return removed;
   }
 
-  /** Compute and store under `tags`. Equal to `tags(names).getOrSet(key, compute, { ttl })`. Taggable stores only. */
-  getOrSet<T>(
-    this: Cache<TaggableStore>,
-    key: KeyInput,
-    compute: () => T | Promise<T>,
-    options?: GetOrSetOptions & { tags?: readonly string[] },
-  ): Promise<T>;
-  getOrSet<T>(key: KeyInput, compute: () => T | Promise<T>, options?: GetOrSetOptions & { tags?: never }): Promise<T>;
-  async getOrSet<T>(
-    key: KeyInput,
-    compute: () => T | Promise<T>,
-    options?: GetOrSetOptions & { tags?: readonly string[] },
-  ): Promise<T> {
-    if (options?.tags) {
-      const { tags, ...rest } = options;
-      return (this as unknown as Cache<TaggableStore>).tags(tags).getOrSet(key, compute, rest);
-    }
+  async getOrSet<T>(key: KeyInput, compute: () => T | Promise<T>, options?: GetOrSetOptions): Promise<T> {
     const hit = await this.get<T>(key);
     if (hit !== undefined) return hit;
     const { lock, ...setOptions } = options ?? {};
     const fill = async (): Promise<T> => {
       const value = await compute();
-      await this.set(key, value, setOptions as SetOptions & { tags?: never });
+      await this.set(key, value, setOptions);
       return value;
     };
     if (!lock) return fill();
@@ -307,7 +248,7 @@ export class Cache<S extends Store = Store> {
   }
 
   async many(keys: KeyInput[]): Promise<(unknown | undefined)[]> {
-    const raws = await this.#store.many(await Promise.all(keys.map((k) => this.#physical(k))));
+    const raws = await this.#store.many(keys.map((k) => this.#stored(k)));
     return raws.map((raw) => this.#unwrap(raw));
   }
 
@@ -318,13 +259,13 @@ export class Cache<S extends Store = Store> {
   }
 
   async touch(key: KeyInput, ttl: number): Promise<boolean> {
-    return this.#store.touch(await this.#physical(key), toMs(ttl));
+    return this.#store.touch(this.#stored(key), toMs(ttl));
   }
 
   /** Store only if absent. Returns true when stored. */
   async add(key: KeyInput, value: unknown, options?: SetOptions): Promise<boolean> {
     this.#assertSettable(value);
-    const stored = await this.#store.add(await this.#physical(key), escapeValue(value), this.#ttlFor(value, options));
+    const stored = await this.#store.add(this.#stored(key), escapeValue(value), this.#ttlFor(value, options));
     if (stored) this.#emit({ type: "write", key: this.#full(key) });
     return stored;
   }
@@ -335,12 +276,12 @@ export class Cache<S extends Store = Store> {
 
   async increment(key: KeyInput, by = 1): Promise<number> {
     this.#assertStep(by);
-    return this.#store.increment(await this.#physical(key), by);
+    return this.#store.increment(this.#stored(key), by);
   }
 
   async decrement(key: KeyInput, by = 1): Promise<number> {
     this.#assertStep(by);
-    return this.#store.decrement(await this.#physical(key), by);
+    return this.#store.decrement(this.#stored(key), by);
   }
 
   async string(key: KeyInput, fallback?: string): Promise<string | undefined> {
@@ -377,7 +318,7 @@ export class Cache<S extends Store = Store> {
     const stale = toMs(staleMs);
     if (fresh > stale)
       throw new RangeError(`flexible() fresh window (${freshMs}ms) must not exceed stale (${staleMs}ms)`);
-    const stored = await this.#physical(key);
+    const stored = this.#stored(key);
     const raw = await this.#store.get(stored);
     const now = this.#now();
 
@@ -483,21 +424,24 @@ export class Cache<S extends Store = Store> {
   }
 
   async invalidate(filter: InvalidateFilter, options: InvalidateOptions = {}): Promise<number> {
-    if (this.#scope.tags.length > 0) throw new UnsupportedError("invalidate()", "tagged caches; use flush()");
     const prefix = this.#scope.prefix;
-    const relative = (key: Key): Key => key.slice(prefix.length);
-    const matches = (key: Key): boolean => {
-      if (!matchKey(prefix, key)) return false;
-      if (typeof filter === "object" && !Array.isArray(filter) && "predicate" in filter) {
-        return filter.predicate(relative(key));
-      }
-      return matchKey([...prefix, ...normalizeKey(filter as KeyInput)], key, options);
-    };
-
     const doomed: { stored: string; key: Key }[] = [];
-    for await (const { key: stored } of this.#store.entries()) {
-      const key = decodeKey(stored);
-      if (key && matches(key)) doomed.push({ stored, key });
+    if (typeof filter === "object" && !Array.isArray(filter) && "predicate" in filter) {
+      // Predicate filters cannot use the prefix index: full scan of the store (documented).
+      const relative = (key: Key): Key => key.slice(prefix.length);
+      for await (const { key: stored } of this.#store.entries()) {
+        const key = decodeKey(stored);
+        if (key && matchKey(prefix, key) && filter.predicate(relative(key))) doomed.push({ stored, key });
+      }
+    } else {
+      // Array filters: visit only the index prefixes that cover the matches (O(matches)). matchKey still decides.
+      const full = [...prefix, ...normalizeKey(filter as KeyInput)];
+      for (const indexPrefix of invalidationPrefixes(full, options.exact === true)) {
+        for await (const stored of this.#store.keysWithPrefix(indexPrefix)) {
+          const key = decodeKey(stored);
+          if (key && matchKey(full, key, options)) doomed.push({ stored, key });
+        }
+      }
     }
     let removed = 0;
     for (const { stored, key } of doomed) {
