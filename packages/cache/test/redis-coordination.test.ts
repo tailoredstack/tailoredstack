@@ -2,8 +2,8 @@ import { spawn } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { fileURLToPath } from "node:url";
 import { Redis } from "ioredis";
-import { Cache, RedisStore } from "../src/index.ts";
 import { afterAll, describe, expect, inject, it } from "vitest";
+import { Cache, RedisStore } from "../src/index.ts";
 
 // Cross-process proof: each operation runs in a real child process sharing only Redis.
 const url = inject("redisUrl");
