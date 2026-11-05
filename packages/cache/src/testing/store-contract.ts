@@ -76,6 +76,23 @@ export function storeContract(
       expect(await store.get("k")).toBe("v");
     });
 
+    timed("put with a null ttl replaces an existing ttl (fake-clock)", async () => {
+      const clock = makeClock();
+      const store = make(clock);
+      await store.put("k", "first", 1_000);
+      await store.put("k", "second", null);
+      clock.advance(5_000);
+      expect(await store.get("k")).toBe("second");
+    });
+
+    it("put with a null ttl replaces an existing ttl (real-time)", async () => {
+      const store = make(makeClock());
+      await store.put("k", "first", 300);
+      await store.put("k", "second", null);
+      await new Promise((r) => setTimeout(r, 500));
+      expect(await store.get("k")).toBe("second");
+    });
+
     it("add stores only when the key is absent", async () => {
       const store = make(makeClock());
       expect(await store.add("k", "first", null)).toBe(true);
