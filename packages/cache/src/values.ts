@@ -1,12 +1,8 @@
-const isPlainObject = (v: object): boolean => {
-  const proto = Object.getPrototypeOf(v);
-  return proto === Object.prototype || proto === null;
-};
-
 /**
- * Throws TypeError if `value` contains something JSON cannot represent: undefined, functions, symbols or
- * bigint, at the top level or anywhere inside plain objects and arrays. Date, Map and Set are not rejected;
- * their lossy JSON form is a documented limit.
+ * Throws TypeError if `value` would not survive JSON: undefined, functions, symbols or bigint, a toJSON() that
+ * returns undefined, or any of those inside an object or array. Class instances are checked by their own fields,
+ * or by what their toJSON() returns, so a field JSON would silently drop is still an error. Date, Map and Set are
+ * not rejected; their lossy JSON form is a documented limit.
  */
 export function assertSerializable(value: unknown, path = "value", seen = new Set<object>()): void {
   const type = typeof value;
@@ -15,11 +11,17 @@ export function assertSerializable(value: unknown, path = "value", seen = new Se
     throw new TypeError(`Cannot cache a ${type} at ${path}`);
   }
   if (value === null || type !== "object") return;
-  const obj = value as object;
-  if (!Array.isArray(obj) && !isPlainObject(obj)) return;
+  const obj = value as Record<string, unknown>;
   // Cycles: JSON.stringify rejects them on write; here we only stop recursing.
   if (seen.has(obj)) return;
   seen.add(obj);
+  if (typeof obj.toJSON === "function") {
+    // JSON stores what toJSON returns, so that is what must be checked.
+    const out: unknown = (obj.toJSON as () => unknown)();
+    if (out === undefined) throw new TypeError(`${path} serializes to undefined`);
+    assertSerializable(out, path, seen);
+    return;
+  }
   if (Array.isArray(obj)) {
     for (let i = 0; i < obj.length; i++) assertSerializable(obj[i], `${path}[${i}]`, seen);
   } else {
