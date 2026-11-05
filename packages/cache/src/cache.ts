@@ -247,7 +247,19 @@ export class Cache<S extends Store = Store> {
     return !(await this.has(key));
   }
 
-  async set(key: KeyInput, value: unknown, options?: SetOptions): Promise<void> {
+  /** Store under `tags`. Equal to `tags(names).set(key, value, { ttl })`. Only on a taggable store. */
+  set(
+    this: Cache<TaggableStore>,
+    key: KeyInput,
+    value: unknown,
+    options?: SetOptions & { tags?: readonly string[] },
+  ): Promise<void>;
+  set(key: KeyInput, value: unknown, options?: SetOptions & { tags?: never }): Promise<void>;
+  async set(key: KeyInput, value: unknown, options?: SetOptions & { tags?: readonly string[] }): Promise<void> {
+    if (options?.tags) {
+      const { tags, ...rest } = options;
+      return (this as unknown as Cache<TaggableStore>).tags(tags).set(key, value, rest);
+    }
     this.#assertSettable(value);
     await this.#store.put(await this.#physical(key), escapeValue(value), this.#ttlFor(value, options));
     this.#emit({ type: "write", key: this.#full(key) });
@@ -265,13 +277,29 @@ export class Cache<S extends Store = Store> {
     return removed;
   }
 
-  async getOrSet<T>(key: KeyInput, compute: () => T | Promise<T>, options?: GetOrSetOptions): Promise<T> {
+  /** Compute and store under `tags`. Equal to `tags(names).getOrSet(key, compute, { ttl })`. Taggable stores only. */
+  getOrSet<T>(
+    this: Cache<TaggableStore>,
+    key: KeyInput,
+    compute: () => T | Promise<T>,
+    options?: GetOrSetOptions & { tags?: readonly string[] },
+  ): Promise<T>;
+  getOrSet<T>(key: KeyInput, compute: () => T | Promise<T>, options?: GetOrSetOptions & { tags?: never }): Promise<T>;
+  async getOrSet<T>(
+    key: KeyInput,
+    compute: () => T | Promise<T>,
+    options?: GetOrSetOptions & { tags?: readonly string[] },
+  ): Promise<T> {
+    if (options?.tags) {
+      const { tags, ...rest } = options;
+      return (this as unknown as Cache<TaggableStore>).tags(tags).getOrSet(key, compute, rest);
+    }
     const hit = await this.get<T>(key);
     if (hit !== undefined) return hit;
     const { lock, ...setOptions } = options ?? {};
     const fill = async (): Promise<T> => {
       const value = await compute();
-      await this.set(key, value, setOptions);
+      await this.set(key, value, setOptions as SetOptions & { tags?: never });
       return value;
     };
     if (!lock) return fill();

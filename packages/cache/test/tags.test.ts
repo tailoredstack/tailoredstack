@@ -129,3 +129,37 @@ describe("tags: runtime guard for untyped callers", () => {
     expect(() => untyped.tags(["user"])).toThrow(UnsupportedError);
   });
 });
+
+describe("tags option on set and getOrSet", () => {
+  it("set with tags round-trips", async () => {
+    const cache = freshCache();
+    await cache.set(["profile", 1], { name: "a" }, { tags: ["user"] });
+    expect(await cache.tags(["user"]).get(["profile", 1])).toEqual({ name: "a" });
+  });
+
+  it("set with tags is equal to the tags() chain", async () => {
+    const cache = freshCache();
+    await cache.set(["p", 1], "via-option", { tags: ["user", "org:1"], ttl: 60_000 });
+    expect(await cache.tags(["org:1", "user"]).get(["p", 1])).toBe("via-option");
+    expect(await cache.get(["p", 1])).toBeUndefined();
+  });
+
+  it("items set with tags are hidden after flush of one of their tags", async () => {
+    const cache = freshCache();
+    await cache.set(["p", 1], "x", { tags: ["user"] });
+    await cache.tags(["user"]).flush();
+    expect(await cache.tags(["user"]).get(["p", 1])).toBeUndefined();
+  });
+
+  it("getOrSet with tags stores under the tag scope", async () => {
+    const cache = freshCache();
+    expect(await cache.getOrSet(["p", 1], () => "computed", { tags: ["user"] })).toBe("computed");
+    expect(await cache.tags(["user"]).get(["p", 1])).toBe("computed");
+    expect(await cache.get(["p", 1])).toBeUndefined();
+  });
+
+  it("set with tags on a non-taggable store throws UnsupportedError", async () => {
+    const untyped = new Cache(new MemoryStore()) as unknown as Cache<TaggableStore>;
+    await expect(untyped.set("k", 1, { tags: ["user"] })).rejects.toThrow(UnsupportedError);
+  });
+});

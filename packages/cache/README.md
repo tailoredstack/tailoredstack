@@ -159,6 +159,14 @@ await cache.tags(["user", "org:1"]).get(["profile", 1]);
 await cache.tags(["user"]).flush(); // every item tagged "user" becomes unreachable
 ```
 
+`set` and `getOrSet` also take `{ tags }`, equal to `cache.tags(tags).set(key, value, { ttl })`:
+
+```ts
+await cache.set(["profile", 1], profile, { tags: ["user"], ttl: 300_000 });
+```
+
+The option type-checks only on a tagged-capable store. `MemoryStore` and `SqliteStore` reject `tags` at compile time, and at runtime throw `UnsupportedError`. Non-string keys are not converted to tags.
+
 Tags are a compile-time capability. `tags()` is only callable on a `Cache<TaggableStore>`, so `new Cache(new MemoryStore()).tags(...)` is a type error. Untyped JS callers get an `UnsupportedError` at runtime.
 
 Costs (Laravel-style, by design):
