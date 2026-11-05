@@ -38,11 +38,11 @@ describe("getOrSet with lock (in-process)", () => {
     expect((rejected[0] as PromiseRejectedResult).reason).toBeInstanceOf(LockTimeoutError);
   });
 
-  it("without lock (default), concurrent getOrSet still both compute", async () => {
+  it("without lock (default), concurrent getOrSet shares one in-flight compute", async () => {
     const cache = new Cache(new MemoryStore());
     const { compute, computes } = counted();
     await Promise.all([cache.getOrSet("k", compute), cache.getOrSet("k", compute)]);
-    expect(computes()).toBe(2);
+    expect(computes()).toBe(1);
   });
 
   it("a hit under lock returns the stored value without computing", async () => {
