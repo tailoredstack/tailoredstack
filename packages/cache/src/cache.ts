@@ -265,11 +265,12 @@ export class Cache<S extends Store = Store> {
       return value;
     };
     if (!lock) {
-      // Callers share one compute only when they would store the same thing. A numeric ttl is part of that
-      // identity; a ttl function cannot be compared, so such calls run on their own.
-      const ttl = setOptions.ttl;
-      if (typeof ttl === "function") return fill();
-      return this.#singleFlight(`${this.#stored(key)}#ttl=${ttl ?? "none"}`, fill);
+      // Callers share one compute only when they would store the same thing: the same key and the same effective
+      // ttl. The effective ttl is the per-call ttl if given, otherwise the scope ttl from ttl(ms). A ttl function
+      // cannot be compared, so such calls run on their own.
+      const effective = setOptions.ttl ?? this.#scope.ttl;
+      if (typeof effective === "function") return fill();
+      return this.#singleFlight(`${this.#stored(key)}#ttl=${effective ?? "none"}`, fill);
     }
     // Under the lock, re-read: a cached null is a value, so only undefined means a miss.
     return this.withoutOverlapping(
