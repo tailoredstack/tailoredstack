@@ -36,7 +36,6 @@ Design:
 - `forgetIf`: conditional DELETE.
 - MySQL: InnoDB key limit (~768 chars) is too short for JSON array keys. Use a SHA-256 primary key plus the full key in a column, so `entries()` still works.
 - Schema: `CREATE TABLE IF NOT EXISTS` on first use, table name option defaulting to `cache`.
-- Tags stay Redis-only.
 
 Testing:
 
