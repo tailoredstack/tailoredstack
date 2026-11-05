@@ -66,6 +66,22 @@ interface FlexEnvelope {
 const isFlex = (raw: unknown): raw is FlexEnvelope =>
   typeof raw === "object" && raw !== null && (raw as Record<string, unknown>)[FLEX] === 1;
 
+// User objects with a reserved top-level key are wrapped on write so they never look like an envelope on read.
+const ESCAPE = "__cache_escaped__";
+interface EscapeEnvelope {
+  [ESCAPE]: 1;
+  v: unknown;
+}
+
+const isEscaped = (raw: unknown): raw is EscapeEnvelope =>
+  typeof raw === "object" && raw !== null && (raw as Record<string, unknown>)[ESCAPE] === 1;
+
+const needsEscape = (value: unknown): boolean =>
+  typeof value === "object" && value !== null && (Object.hasOwn(value, FLEX) || Object.hasOwn(value, ESCAPE));
+
+const escapeValue = (value: unknown): unknown => (needsEscape(value) ? { [ESCAPE]: 1, v: value } : value);
+const unescapeValue = (raw: unknown): unknown => (isEscaped(raw) ? raw.v : raw);
+
 function assertTtl(ttl: number): void {
   if (!Number.isFinite(ttl) || ttl <= 0) throw new RangeError(`ttl must be a positive finite number of ms, got ${ttl}`);
 }
@@ -200,9 +216,9 @@ export class Cache<S extends Store = Store> {
     assertSerializable(value);
   }
 
-  /** Unwraps flexible envelopes; plain values pass through. */
+  /** Unwraps flexible and escape envelopes; plain values pass through. */
   #unwrap(raw: unknown): unknown {
-    return isFlex(raw) ? raw.v : raw;
+    return isFlex(raw) ? unescapeValue(raw.v) : unescapeValue(raw);
   }
 
   async get<T = unknown>(key: KeyInput): Promise<T | undefined> {
@@ -225,7 +241,7 @@ export class Cache<S extends Store = Store> {
 
   async set(key: KeyInput, value: unknown, options?: SetOptions): Promise<void> {
     this.#assertSettable(value);
-    await this.#store.put(await this.#physical(key), value, this.#ttlFor(value, options));
+    await this.#store.put(await this.#physical(key), escapeValue(value), this.#ttlFor(value, options));
     this.#emit({ type: "write", key: this.#full(key) });
   }
 
@@ -267,7 +283,7 @@ export class Cache<S extends Store = Store> {
   /** Store only if absent. Returns true when stored. */
   async add(key: KeyInput, value: unknown, options?: SetOptions): Promise<boolean> {
     this.#assertSettable(value);
-    const stored = await this.#store.add(await this.#physical(key), value, this.#ttlFor(value, options));
+    const stored = await this.#store.add(await this.#physical(key), escapeValue(value), this.#ttlFor(value, options));
     if (stored) this.#emit({ type: "write", key: this.#full(key) });
     return stored;
   }
@@ -329,7 +345,7 @@ export class Cache<S extends Store = Store> {
       this.#assertSettable(value);
       const envelope: FlexEnvelope = {
         [FLEX]: 1,
-        v: value,
+        v: escapeValue(value),
         freshUntil: this.#now() + fresh,
         staleUntil: this.#now() + stale,
       };
@@ -341,14 +357,14 @@ export class Cache<S extends Store = Store> {
     if (isFlex(raw)) {
       if (now < raw.freshUntil) {
         this.#emit({ type: "hit", key: this.#full(key) });
-        return raw.v as T;
+        return unescapeValue(raw.v) as T;
       }
       if (now < raw.staleUntil) {
         this.#emit({ type: "hit", key: this.#full(key) });
         // Background refresh shares the in-flight run, so concurrent stale hits recompute once.
         // A failed refresh keeps serving the stale value rather than throwing.
         void this.#singleFlight(stored, refresh).catch(() => undefined);
-        return raw.v as T;
+        return unescapeValue(raw.v) as T;
       }
     }
     this.#emit({ type: "miss", key: this.#full(key) });
