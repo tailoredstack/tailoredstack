@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { Cache } from "../src/cache.ts";
 import { MemoryStore } from "../src/drivers/memory.ts";
 import { makeClock } from "../src/testing/index.ts";
@@ -35,6 +35,22 @@ describe("increment/decrement step validation", () => {
     const { cache } = setup();
     await expect(cache.increment(["n"], 1.5)).rejects.toThrow(RangeError);
     expect(await cache.increment(["n"], 2)).toBe(2);
+  });
+});
+
+describe("flexible window validation", () => {
+  it("rejects fresh > stale with RangeError before any store access", async () => {
+    const { cache, store } = setup();
+    const spy = vi.spyOn(store, "get");
+    const putSpy = vi.spyOn(store, "put");
+    await expect(cache.flexible(["k"], [5000, 1000], () => 1)).rejects.toThrow(RangeError);
+    expect(spy).not.toHaveBeenCalled();
+    expect(putSpy).not.toHaveBeenCalled();
+  });
+
+  it("accepts fresh === stale", async () => {
+    const { cache } = setup();
+    expect(await cache.flexible(["k"], [1000, 1000], () => 7)).toBe(7);
   });
 });
 
