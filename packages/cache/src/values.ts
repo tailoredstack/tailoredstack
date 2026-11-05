@@ -18,10 +18,18 @@ function walk(value: unknown, path: string, stack: Set<object>, allowToJSON: boo
   if (type === "function" || type === "symbol" || type === "bigint") {
     throw new TypeError(`Cannot cache a ${type} at ${path}`);
   }
+  // JSON has no NaN or Infinity: JSON.stringify writes them as null, so reading back gives a different value.
+  if (type === "number" && !Number.isFinite(value as number)) {
+    throw new TypeError(`Cannot cache a non-finite number (${value}) at ${path}`);
+  }
   if (value === null || type !== "object") return value;
 
   const obj = value as Record<string, unknown>;
   if (stack.has(obj)) throw new TypeError(`Cannot cache a circular structure at ${path}`);
+  // An invalid Date serializes to null through its own toJSON, which would silently change the value.
+  if (obj instanceof Date && Number.isNaN(obj.getTime())) {
+    throw new TypeError(`Cannot cache an invalid Date at ${path}`);
+  }
 
   if (allowToJSON && typeof obj.toJSON === "function") {
     // JSON stores the result of toJSON(), not the object, so that result is what must be checked.
@@ -33,7 +41,15 @@ function walk(value: unknown, path: string, stack: Set<object>, allowToJSON: boo
 
   stack.add(obj);
   try {
-    if (Array.isArray(obj)) return obj.map((item, i) => walk(item, `${path}[${i}]`, stack, true));
+    if (Array.isArray(obj)) {
+      const out: unknown[] = [];
+      for (let i = 0; i < obj.length; i++) {
+        // A hole has no element: JSON would store it as null, so reject it rather than change the value.
+        if (!(i in obj)) throw new TypeError(`Cannot cache a sparse array (hole at ${path}[${i}])`);
+        out.push(walk(obj[i], `${path}[${i}]`, stack, true));
+      }
+      return out;
+    }
     // fromEntries defines properties rather than assigning, so a "__proto__" key stays data.
     return Object.fromEntries(Object.entries(obj).map(([k, item]) => [k, walk(item, `${path}.${k}`, stack, true)]));
   } finally {
