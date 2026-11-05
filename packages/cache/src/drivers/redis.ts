@@ -67,6 +67,20 @@ if not redis.call('SET', KEYS[1], ARGV[1], unpack(opts)) then return 0 end
 for i = 2, #KEYS do redis.call('SADD', KEYS[i], ARGV[3]) end
 return 1`;
 
+// Increment, then reverse the step if the result leaves the safe-integer range, so an overflow leaves the stored
+// value unchanged, as memory and sqlite do. Redis does the arithmetic; Lua only compares the result. Any value
+// above 2^53 converts to a double that still compares as out of range. KEYS[1] = value key, KEYS[2..] = index sets.
+// ARGV = step, member. The index is written only when the step is kept.
+const INCR_SAFE = `
+local existed = redis.call('EXISTS', KEYS[1])
+local v = redis.call('INCRBY', KEYS[1], ARGV[1])
+if v > 9007199254740991 or v < -9007199254740991 then
+  if existed == 0 then redis.call('DEL', KEYS[1]) else redis.call('DECRBY', KEYS[1], ARGV[1]) end
+  return redis.error_reply('increment outside the safe integer range')
+end
+for i = 2, #KEYS do redis.call('SADD', KEYS[i], ARGV[2]) end
+return v`;
+
 const escapeGlob = (s: string) => s.replace(/[*?[\]\\]/g, "\\$&");
 
 /**
@@ -155,11 +169,17 @@ export class RedisStore implements Store {
 
   // INCRBY keeps the existing TTL natively, matching the Store contract. Indexing on every call is idempotent.
   async increment(key: string, by = 1): Promise<number> {
-    const tx = this.#client.multi();
-    tx.incrby(this.#key(key), by);
-    this.#index(tx, key);
-    const [[, value]] = await this.#run(tx);
-    return value as number;
+    const indexKeys = indexPrefixesOf(key).map((prefix) => this.#indexKey(prefix));
+    try {
+      return Number(
+        await this.#client.eval(INCR_SAFE, 1 + indexKeys.length, this.#key(key), ...indexKeys, String(by), key),
+      );
+    } catch (error) {
+      if (error instanceof Error && error.message.includes("safe integer range")) {
+        throw new RangeError(`increment of "${key}" by ${by} would leave the safe integer range`);
+      }
+      throw error;
+    }
   }
 
   async decrement(key: string, by = 1): Promise<number> {
