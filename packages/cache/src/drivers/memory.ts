@@ -94,6 +94,7 @@ export class MemoryStore implements Store {
     const current: unknown = entry ? JSON.parse(entry.raw) : 0;
     if (!Number.isInteger(current)) throw new TypeError(`Cache value at "${key}" is not an integer`);
     const next = (current as number) + by;
+    if (!Number.isSafeInteger(next)) throw new RangeError(`Cache value at "${key}" would leave the safe integer range`);
     this.#set(key, { raw: JSON.stringify(next), expiresAt: entry ? entry.expiresAt : null });
     return next;
   }
