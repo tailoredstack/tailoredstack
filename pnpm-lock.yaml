@@ -181,6 +181,9 @@ importers:
       '@testcontainers/redis':
         specifier: ^12.2.1
         version: 12.2.1(bare-buffer@3.7.1)
+      '@testcontainers/valkey':
+        specifier: ^12.2.1
+        version: 12.2.1(bare-buffer@3.7.1)
       '@types/node':
         specifier: ^26.6.6
         version: 26.6.6
@@ -520,6 +523,9 @@ packages:
 
   '@testcontainers/redis@12.2.1':
     resolution: {integrity: sha512-pF/HAs0LEsSfuQv++Wyp36S9cFNo8vfweddUOJQl/+wuAW1ThlupJLQv7L4PKkpqYGq+epRuaKhPrNKKnmbU3g==}
+
+  '@testcontainers/valkey@12.2.1':
+    resolution: {integrity: sha512-H6Bp9hFKUc987/0cNODGGApNnZuLBSfr4SY8DOnJ7pgIa+QCXPskwYRECk4luIvPwWBbyDeiwaRUYq4qUzO59Q==}
 
   '@types/chai@5.2.3':
     resolution: {integrity: sha512-Mw558oeA9fFbv65/y4mHtXDs9bPnFMZAL/jxdPFUpOHHIXX91mcgEHbS5Lahr+pwZFR8A7GQleRWeI6cGFC2UA==}
@@ -1967,6 +1973,15 @@ snapshots:
   '@rolldown/pluginutils@1.0.1': {}
 
   '@testcontainers/redis@12.2.1(bare-buffer@3.7.1)':
+    dependencies:
+      testcontainers: 12.2.1(bare-buffer@3.7.1)
+    transitivePeerDependencies:
+      - bare-abort-controller
+      - bare-buffer
+      - react-native-b4a
+      - supports-color
+
+  '@testcontainers/valkey@12.2.1(bare-buffer@3.7.1)':
     dependencies:
       testcontainers: 12.2.1(bare-buffer@3.7.1)
     transitivePeerDependencies:

@@ -414,7 +414,7 @@ export class Cache<S extends Store = Store> {
   }
 
   /** Underlying driver, read-only. */
-  getStore(): Store {
+  getStore(): S {
     return this.#store;
   }
 }

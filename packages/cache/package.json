@@ -45,14 +45,41 @@
   "scripts": {
     "build": "tsc -p tsconfig.json",
     "test": "vitest run",
-    "typecheck": "tsc -p tsconfig.test.json"
+    "typecheck": "tsc -p tsconfig.test.json",
+    "test:e2e": "vitest run --config vitest.e2e.config.ts"
   },
   "devDependencies": {
     "@testcontainers/redis": "^12.2.1",
+    "@testcontainers/valkey": "^12.2.1",
     "@types/node": "^26.6.6",
     "effect": "^4.1.2",
     "ioredis": "^6.0.0",
     "typescript": "^7.0.2",
     "vitest": "^5.1.0"
+  },
+  "author": "Jose Ederango Jr",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/tailoredstack/tailoredstack.git",
+    "directory": "packages/cache"
+  },
+  "homepage": "https://github.com/tailoredstack/tailoredstack/tree/main/packages/cache#readme",
+  "bugs": {
+    "url": "https://github.com/tailoredstack/tailoredstack/issues"
+  },
+  "keywords": [
+    "cache",
+    "typescript",
+    "redis",
+    "valkey",
+    "sqlite",
+    "memory",
+    "tanstack",
+    "stale-while-revalidate",
+    "locks",
+    "tags"
+  ],
+  "engines": {
+    "node": ">=22"
   }
 }
