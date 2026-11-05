@@ -33,3 +33,18 @@ describe("an overflowing increment leaves no trace on a missing key", () => {
     expect(await cache.has(["fresh"])).toBe(false);
   });
 });
+
+describe("RedisStore increment on a non-integer value matches memory and sqlite", () => {
+  it("rejects with TypeError, not a raw Redis error", async () => {
+    const cache = freshCache();
+    await cache.set(["t"], "text");
+    await expect(cache.increment(["t"], 1)).rejects.toBeInstanceOf(TypeError);
+  });
+
+  it("the stored value is unchanged after the rejected increment", async () => {
+    const cache = freshCache();
+    await cache.set(["t"], "text");
+    await cache.increment(["t"], 1).catch(() => undefined);
+    expect(await cache.get(["t"])).toBe("text");
+  });
+});
