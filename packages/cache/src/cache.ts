@@ -1,12 +1,19 @@
-import { createHash } from "node:crypto";
-import { isTaggable, type Store, type TaggableStore } from "./contracts.ts";
-import { UnsupportedError } from "./errors.ts";
-import { decodeKey, encodeKey, type Key, type KeyInput, matchKey, normalizeKey } from "./keys.ts";
+import type { Store } from "./contracts.ts";
+import { decodeKey, encodeKey, invalidationPrefixes, type Key, type KeyInput, matchKey, normalizeKey } from "./keys.ts";
+import { assertSerializable } from "./values.ts";
 
 export interface SetOptions {
   /** Milliseconds until expiry. A number, or a function of the value. Omit for the chained default; if none, no expiry. */
   ttl?: number | ((value: unknown) => number);
 }
+
+export type GetOrSetOptions = SetOptions & {
+  /**
+   * Single-flight the miss across processes via withoutOverlapping. Off by default. `true` uses the lock defaults;
+   * a LockOptions object tunes them. Under the lock the key is re-read, so a value filled by another holder is used.
+   */
+  lock?: boolean | LockOptions;
+};
 
 export interface InvalidateOptions {
   exact?: boolean;
@@ -20,8 +27,16 @@ export interface CacheOptions {
 }
 
 export interface LockOptions {
-  /** How long the lock is held before it expires (ms), so a crashed holder can't block forever. */
+  /**
+   * Lease length (ms). A crashed holder's lock expires after this. While the callback runs, the lease is renewed
+   * every lockFor/3 ms, so a live holder keeps exclusivity.
+   */
   lockFor?: number;
+  /**
+   * Longest a holder keeps renewing (ms, default 300_000). Past this, renewal stops and the lock expires within
+   * lockFor, so a callback that runs longer than maxHoldFor loses exclusivity.
+   */
+  maxHoldFor?: number;
   /** How long to keep retrying to acquire (ms). 0 = fail immediately. */
   waitFor?: number;
 }
@@ -57,6 +72,22 @@ interface FlexEnvelope {
 const isFlex = (raw: unknown): raw is FlexEnvelope =>
   typeof raw === "object" && raw !== null && (raw as Record<string, unknown>)[FLEX] === 1;
 
+// User objects with a reserved top-level key are wrapped on write so they never look like an envelope on read.
+const ESCAPE = "__cache_escaped__";
+interface EscapeEnvelope {
+  [ESCAPE]: 1;
+  v: unknown;
+}
+
+const isEscaped = (raw: unknown): raw is EscapeEnvelope =>
+  typeof raw === "object" && raw !== null && (raw as Record<string, unknown>)[ESCAPE] === 1;
+
+const needsEscape = (value: unknown): boolean =>
+  typeof value === "object" && value !== null && (Object.hasOwn(value, FLEX) || Object.hasOwn(value, ESCAPE));
+
+const escapeValue = (value: unknown): unknown => (needsEscape(value) ? { [ESCAPE]: 1, v: value } : value);
+const unescapeValue = (raw: unknown): unknown => (isEscaped(raw) ? raw.v : raw);
+
 function assertTtl(ttl: number): void {
   if (!Number.isFinite(ttl) || ttl <= 0) throw new RangeError(`ttl must be a positive finite number of ms, got ${ttl}`);
 }
@@ -74,8 +105,6 @@ function sleepFor(ms: number): Promise<void> {
 interface Scope {
   prefix: Key;
   ttl: number | null;
-  /** Tag names when this is a tagged scope; empty for untagged caches. */
-  tags: readonly string[];
 }
 
 /**
@@ -93,7 +122,7 @@ export class Cache<S extends Store = Store> {
   constructor(
     store: S,
     options: CacheOptions = {},
-    scope: Scope = { prefix: [], ttl: null, tags: [] },
+    scope: Scope = { prefix: [], ttl: null },
     shared?: { listeners: Set<CacheListener>; now: () => number; inflight: Map<string, Promise<unknown>> },
   ) {
     this.#store = store;
@@ -122,24 +151,6 @@ export class Cache<S extends Store = Store> {
     return this.#derive({ ...this.#scope, ttl: toMs(ms) });
   }
 
-  /**
-   * Scope to a set of tags (Redis only). Writes go under a key that embeds the current tag ids; flush()
-   * rotates the ids so those items become unreachable and expire on their own TTL.
-   */
-  tags(this: Cache<TaggableStore>, names: readonly string[]): Cache<TaggableStore> {
-    if (names.length === 0) throw new RangeError("tags() needs at least one tag name");
-    if (!isTaggable(this.#store)) throw new UnsupportedError("tags()", (this.#store as object).constructor.name);
-    // Sorted so tag order never changes the namespace.
-    return this.#derive({ ...this.#scope, tags: [...new Set(names)].sort() }) as Cache<TaggableStore>;
-  }
-
-  /** Rotate every tag in this scope. Tagged items become unreachable; untagged keys are unaffected. */
-  async flush(this: Cache<TaggableStore>): Promise<void> {
-    if (this.#scope.tags.length === 0)
-      throw new UnsupportedError("flush()", "an untagged cache; use tags([...]).flush()");
-    for (const name of this.#scope.tags) await this.#store.rotateTag(name);
-  }
-
   /** Subscribe to hit/miss/write/forget events. Returns an unsubscribe function. */
   on(type: CacheEvent["type"], listener: CacheListener): () => void {
     const wrapped: CacheListener = (event) => {
@@ -163,15 +174,6 @@ export class Cache<S extends Store = Store> {
     return encodeKey(this.#full(key));
   }
 
-  /** Physical key for a tagged item: sha1(tag ids) + ":" + key. Untagged caches use the plain key. */
-  async #physical(key: KeyInput): Promise<string> {
-    const base = this.#stored(key);
-    if (this.#scope.tags.length === 0) return base;
-    const store = this.#store as unknown as TaggableStore;
-    const ids = await Promise.all(this.#scope.tags.map((name) => store.tagId(name)));
-    return `${createHash("sha1").update(ids.join("|")).digest("hex")}:${base}`;
-  }
-
   #ttlFor(value: unknown, options?: SetOptions): number | null {
     const ttl = options?.ttl ?? this.#scope.ttl;
     if (ttl === null || ttl === undefined) return null;
@@ -188,16 +190,16 @@ export class Cache<S extends Store = Store> {
   }
 
   #assertSettable(value: unknown): void {
-    if (value === undefined) throw new TypeError("Cannot cache undefined; use delete() or return null");
+    assertSerializable(value);
   }
 
-  /** Unwraps flexible envelopes; plain values pass through. */
+  /** Unwraps flexible and escape envelopes; plain values pass through. */
   #unwrap(raw: unknown): unknown {
-    return isFlex(raw) ? raw.v : raw;
+    return isFlex(raw) ? unescapeValue(raw.v) : unescapeValue(raw);
   }
 
   async get<T = unknown>(key: KeyInput): Promise<T | undefined> {
-    const raw = await this.#store.get(await this.#physical(key));
+    const raw = await this.#store.get(this.#stored(key));
     if (raw === undefined) {
       this.#emit({ type: "miss", key: this.#full(key) });
       return undefined;
@@ -207,7 +209,7 @@ export class Cache<S extends Store = Store> {
   }
 
   async has(key: KeyInput): Promise<boolean> {
-    return (await this.#store.get(await this.#physical(key))) !== undefined;
+    return (await this.#store.get(this.#stored(key))) !== undefined;
   }
 
   async missing(key: KeyInput): Promise<boolean> {
@@ -216,12 +218,12 @@ export class Cache<S extends Store = Store> {
 
   async set(key: KeyInput, value: unknown, options?: SetOptions): Promise<void> {
     this.#assertSettable(value);
-    await this.#store.put(await this.#physical(key), value, this.#ttlFor(value, options));
+    await this.#store.put(this.#stored(key), escapeValue(value), this.#ttlFor(value, options));
     this.#emit({ type: "write", key: this.#full(key) });
   }
 
   async delete(key: KeyInput): Promise<boolean> {
-    const removed = await this.#store.forget(await this.#physical(key));
+    const removed = await this.#store.forget(this.#stored(key));
     if (removed) this.#emit({ type: "forget", key: this.#full(key) });
     return removed;
   }
@@ -232,41 +234,54 @@ export class Cache<S extends Store = Store> {
     return removed;
   }
 
-  async getOrSet<T>(key: KeyInput, compute: () => T | Promise<T>, options?: SetOptions): Promise<T> {
+  async getOrSet<T>(key: KeyInput, compute: () => T | Promise<T>, options?: GetOrSetOptions): Promise<T> {
     const hit = await this.get<T>(key);
     if (hit !== undefined) return hit;
-    const value = await compute();
-    await this.set(key, value, options);
-    return value;
+    const { lock, ...setOptions } = options ?? {};
+    const fill = async (): Promise<T> => {
+      const value = await compute();
+      await this.set(key, value, setOptions);
+      return value;
+    };
+    if (!lock) return fill();
+    return this.withoutOverlapping(key, async () => (await this.get<T>(key)) ?? fill(), lock === true ? {} : lock);
   }
 
   async many(keys: KeyInput[]): Promise<(unknown | undefined)[]> {
-    const raws = await this.#store.many(await Promise.all(keys.map((k) => this.#physical(k))));
+    const raws = await this.#store.many(keys.map((k) => this.#stored(k)));
     return raws.map((raw) => this.#unwrap(raw));
   }
 
   async putMany(entries: [KeyInput, unknown][], options?: SetOptions): Promise<void> {
+    // Validate the whole batch first so a bad entry does not leave earlier entries written.
+    for (const [, value] of entries) this.#assertSettable(value);
     for (const [key, value] of entries) await this.set(key, value, options);
   }
 
   async touch(key: KeyInput, ttl: number): Promise<boolean> {
-    return this.#store.touch(await this.#physical(key), toMs(ttl));
+    return this.#store.touch(this.#stored(key), toMs(ttl));
   }
 
   /** Store only if absent. Returns true when stored. */
   async add(key: KeyInput, value: unknown, options?: SetOptions): Promise<boolean> {
     this.#assertSettable(value);
-    const stored = await this.#store.add(await this.#physical(key), value, this.#ttlFor(value, options));
+    const stored = await this.#store.add(this.#stored(key), escapeValue(value), this.#ttlFor(value, options));
     if (stored) this.#emit({ type: "write", key: this.#full(key) });
     return stored;
   }
 
+  #assertStep(by: number): void {
+    if (!Number.isSafeInteger(by)) throw new RangeError(`step must be a safe integer, got ${by}`);
+  }
+
   async increment(key: KeyInput, by = 1): Promise<number> {
-    return this.#store.increment(await this.#physical(key), by);
+    this.#assertStep(by);
+    return this.#store.increment(this.#stored(key), by);
   }
 
   async decrement(key: KeyInput, by = 1): Promise<number> {
-    return this.#store.decrement(await this.#physical(key), by);
+    this.#assertStep(by);
+    return this.#store.decrement(this.#stored(key), by);
   }
 
   async string(key: KeyInput, fallback?: string): Promise<string | undefined> {
@@ -301,7 +316,9 @@ export class Cache<S extends Store = Store> {
   async flexible<T>(key: KeyInput, [freshMs, staleMs]: [number, number], compute: () => T | Promise<T>): Promise<T> {
     const fresh = toMs(freshMs);
     const stale = toMs(staleMs);
-    const stored = await this.#physical(key);
+    if (fresh > stale)
+      throw new RangeError(`flexible() fresh window (${freshMs}ms) must not exceed stale (${staleMs}ms)`);
+    const stored = this.#stored(key);
     const raw = await this.#store.get(stored);
     const now = this.#now();
 
@@ -310,7 +327,7 @@ export class Cache<S extends Store = Store> {
       this.#assertSettable(value);
       const envelope: FlexEnvelope = {
         [FLEX]: 1,
-        v: value,
+        v: escapeValue(value),
         freshUntil: this.#now() + fresh,
         staleUntil: this.#now() + stale,
       };
@@ -322,14 +339,14 @@ export class Cache<S extends Store = Store> {
     if (isFlex(raw)) {
       if (now < raw.freshUntil) {
         this.#emit({ type: "hit", key: this.#full(key) });
-        return raw.v as T;
+        return unescapeValue(raw.v) as T;
       }
       if (now < raw.staleUntil) {
         this.#emit({ type: "hit", key: this.#full(key) });
         // Background refresh shares the in-flight run, so concurrent stale hits recompute once.
         // A failed refresh keeps serving the stale value rather than throwing.
         void this.#singleFlight(stored, refresh).catch(() => undefined);
-        return raw.v as T;
+        return unescapeValue(raw.v) as T;
       }
     }
     this.#emit({ type: "miss", key: this.#full(key) });
@@ -341,11 +358,7 @@ export class Cache<S extends Store = Store> {
     const lockKey = `lock:${this.#stored(key)}`;
     const token = `${Math.random()}:${this.#now()}`;
     await this.#acquire(lockKey, token, options, this.#full(key));
-    try {
-      return await callback();
-    } finally {
-      await this.#store.forgetIf(lockKey, token);
-    }
+    return this.#lease(lockKey, token, options, callback);
   }
 
   /** At most `limit` callbacks run concurrently for `key`. Each slot is a lock with its own token. */
@@ -359,16 +372,44 @@ export class Cache<S extends Store = Store> {
         const slotKey = `${base}:${slot}`;
         const token = `${Math.random()}:${this.#now()}`;
         const got = await this.#store.add(slotKey, token, toMs(options.lockFor ?? 30_000));
-        if (got) {
-          try {
-            return await callback();
-          } finally {
-            await this.#store.forgetIf(slotKey, token);
-          }
-        }
+        if (got) return this.#lease(slotKey, token, options, callback);
       }
       if (this.#now() >= deadline) throw new LockTimeoutError(this.#full(key));
       await sleepFor(10);
+    }
+  }
+
+  /**
+   * Run `callback` under a held lock, renewing the lease every lockFor/3 until the callback settles or maxHoldFor
+   * passes. A lost lease (extendIf false) or a failed renewal stops renewals without failing the callback.
+   * Release is token-checked, so a late release never frees a successor's lock.
+   */
+  async #lease<T>(lockKey: string, token: string, options: LockOptions, callback: () => T | Promise<T>): Promise<T> {
+    const lockFor = toMs(options.lockFor ?? 30_000);
+    const maxHoldFor = toMs(options.maxHoldFor ?? 300_000);
+    const started = this.#now();
+    let active = true;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const renew = async (): Promise<void> => {
+      if (!active) return;
+      if (this.#now() - started >= maxHoldFor) {
+        active = false;
+        return;
+      }
+      try {
+        if (!(await this.#store.extendIf(lockKey, token, lockFor))) active = false;
+      } catch {
+        active = false;
+      }
+      if (active) timer = setTimeout(renew, lockFor / 3);
+    };
+    timer = setTimeout(renew, lockFor / 3);
+    try {
+      return await callback();
+    } finally {
+      active = false;
+      clearTimeout(timer);
+      await this.#store.forgetIf(lockKey, token);
     }
   }
 
@@ -383,21 +424,24 @@ export class Cache<S extends Store = Store> {
   }
 
   async invalidate(filter: InvalidateFilter, options: InvalidateOptions = {}): Promise<number> {
-    if (this.#scope.tags.length > 0) throw new UnsupportedError("invalidate()", "tagged caches; use flush()");
     const prefix = this.#scope.prefix;
-    const relative = (key: Key): Key => key.slice(prefix.length);
-    const matches = (key: Key): boolean => {
-      if (!matchKey(prefix, key)) return false;
-      if (typeof filter === "object" && !Array.isArray(filter) && "predicate" in filter) {
-        return filter.predicate(relative(key));
-      }
-      return matchKey([...prefix, ...normalizeKey(filter as KeyInput)], key, options);
-    };
-
     const doomed: { stored: string; key: Key }[] = [];
-    for await (const { key: stored } of this.#store.entries()) {
-      const key = decodeKey(stored);
-      if (key && matches(key)) doomed.push({ stored, key });
+    if (typeof filter === "object" && !Array.isArray(filter) && "predicate" in filter) {
+      // Predicate filters cannot use the prefix index: full scan of the store (documented).
+      const relative = (key: Key): Key => key.slice(prefix.length);
+      for await (const { key: stored } of this.#store.entries()) {
+        const key = decodeKey(stored);
+        if (key && matchKey(prefix, key) && filter.predicate(relative(key))) doomed.push({ stored, key });
+      }
+    } else {
+      // Array filters: visit only the index prefixes that cover the matches (O(matches)). matchKey still decides.
+      const full = [...prefix, ...normalizeKey(filter as KeyInput)];
+      for (const indexPrefix of invalidationPrefixes(full, options.exact === true)) {
+        for await (const stored of this.#store.keysWithPrefix(indexPrefix)) {
+          const key = decodeKey(stored);
+          if (key && matchKey(full, key, options)) doomed.push({ stored, key });
+        }
+      }
     }
     let removed = 0;
     for (const { stored, key } of doomed) {

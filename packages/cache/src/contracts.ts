@@ -14,25 +14,16 @@ export interface Store {
   forget(key: string): Promise<boolean>;
   /** Delete only if the stored value equals `expected` (JSON-canonical). Used for lock release. */
   forgetIf(key: string, expected: unknown): Promise<boolean>;
+  /**
+   * Atomic compare-and-extend. If the live entry equals `expected` (JSON-canonical), set its expiry to now + ttlMs
+   * and return true. Otherwise return false and change nothing. Never creates or revives a key. Used for lock renewal.
+   */
+  extendIf(key: string, expected: unknown, ttlMs: number): Promise<boolean>;
   /** Live (unexpired) entries only. */
   entries(): AsyncIterable<{ key: string; value: unknown }>;
-}
-
-/**
- * Optional capability for drivers with native O(1) tag invalidation.
- * A tag is a versioned id; items are stored under a key that embeds the current ids,
- * so rotating an id makes every item under it unreachable (they expire on their own TTL).
- */
-export interface TaggableStore extends Store {
-  /** Current id for `name`, creating one if absent. Ids never expire. */
-  tagId(name: string): Promise<string>;
-  /** Replace the id for `name`. Items under the old id become unreachable. */
-  rotateTag(name: string): Promise<void>;
-}
-
-export function isTaggable(store: Store): store is TaggableStore {
-  return (
-    typeof (store as Partial<TaggableStore>).tagId === "function" &&
-    typeof (store as Partial<TaggableStore>).rotateTag === "function"
-  );
+  /**
+   * Stored keys that start with `prefix` and are live. Cache.invalidate passes only encodeKey-shaped prefixes: an
+   * exact key (ends in "]") or a children prefix (ends in ","). Must cost O(matches), not O(store).
+   */
+  keysWithPrefix(prefix: string): AsyncIterable<string>;
 }

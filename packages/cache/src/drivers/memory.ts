@@ -9,19 +9,46 @@ export interface MemoryStoreOptions {
   now?: () => number;
 }
 
+/**
+ * Map for point lookups, plus `#sorted`: the same keys in code-unit order, so keysWithPrefix binary-searches.
+ * Cost: a key insert or delete splices the sorted array, O(n) memmove. Reads and prefix scans are O(log n + matches).
+ */
 export class MemoryStore implements Store {
   readonly #entries = new Map<string, Entry>();
+  readonly #sorted: string[] = [];
   readonly #now: () => number;
 
   constructor({ now = Date.now }: MemoryStoreOptions = {}) {
     this.#now = now;
   }
 
+  /** First index whose key is >= `key`. */
+  #lowerBound(key: string): number {
+    let lo = 0;
+    let hi = this.#sorted.length;
+    while (lo < hi) {
+      const mid = (lo + hi) >>> 1;
+      if ((this.#sorted[mid] as string) < key) lo = mid + 1;
+      else hi = mid;
+    }
+    return lo;
+  }
+
+  #set(key: string, entry: Entry): void {
+    if (!this.#entries.has(key)) this.#sorted.splice(this.#lowerBound(key), 0, key);
+    this.#entries.set(key, entry);
+  }
+
+  #delete(key: string): void {
+    if (!this.#entries.delete(key)) return;
+    this.#sorted.splice(this.#lowerBound(key), 1);
+  }
+
   #live(key: string): Entry | undefined {
     const entry = this.#entries.get(key);
     if (!entry) return undefined;
     if (entry.expiresAt !== null && this.#now() >= entry.expiresAt) {
-      this.#entries.delete(key);
+      this.#delete(key);
       return undefined;
     }
     return entry;
@@ -41,7 +68,7 @@ export class MemoryStore implements Store {
   }
 
   async put(key: string, value: unknown, ttlMs: number | null): Promise<void> {
-    this.#entries.set(key, { raw: JSON.stringify(value), expiresAt: this.#expiry(ttlMs) });
+    this.#set(key, { raw: JSON.stringify(value), expiresAt: this.#expiry(ttlMs) });
   }
 
   async putMany(values: Record<string, unknown>, ttlMs: number | null): Promise<void> {
@@ -67,37 +94,62 @@ export class MemoryStore implements Store {
     const current: unknown = entry ? JSON.parse(entry.raw) : 0;
     if (!Number.isInteger(current)) throw new TypeError(`Cache value at "${key}" is not an integer`);
     const next = (current as number) + by;
-    this.#entries.set(key, { raw: JSON.stringify(next), expiresAt: entry ? entry.expiresAt : null });
+    this.#set(key, { raw: JSON.stringify(next), expiresAt: entry ? entry.expiresAt : null });
     return next;
   }
 
   async touch(key: string, ttlMs: number): Promise<boolean> {
     const entry = this.#live(key);
     if (!entry) return false;
-    this.#entries.set(key, { ...entry, expiresAt: this.#expiry(ttlMs) });
+    this.#set(key, { ...entry, expiresAt: this.#expiry(ttlMs) });
     return true;
   }
 
   async forget(key: string): Promise<boolean> {
     if (!this.#live(key)) return false;
-    this.#entries.delete(key);
+    this.#delete(key);
     return true;
   }
 
   async forgetIf(key: string, expected: unknown): Promise<boolean> {
     const entry = this.#live(key);
     if (!entry || entry.raw !== JSON.stringify(expected)) return false;
-    this.#entries.delete(key);
+    this.#delete(key);
+    return true;
+  }
+
+  async extendIf(key: string, expected: unknown, ttlMs: number): Promise<boolean> {
+    const entry = this.#live(key);
+    if (!entry || entry.raw !== JSON.stringify(expected)) return false;
+    this.#set(key, { ...entry, expiresAt: this.#expiry(ttlMs) });
     return true;
   }
 
   async *entries(): AsyncGenerator<{ key: string; value: unknown }> {
     for (const [key, entry] of this.#entries) {
       if (entry.expiresAt !== null && this.#now() >= entry.expiresAt) {
-        this.#entries.delete(key);
+        this.#delete(key);
         continue;
       }
       yield { key, value: JSON.parse(entry.raw) };
+    }
+  }
+
+  /**
+   * Live keys starting with `prefix`, in sorted order. Expired keys met on the way are purged. Callers must not
+   * mutate the store while iterating: Cache.invalidate collects keys first, then forgets them.
+   */
+  async *keysWithPrefix(prefix: string): AsyncGenerator<string> {
+    for (let i = this.#lowerBound(prefix); i < this.#sorted.length; ) {
+      const key = this.#sorted[i] as string;
+      if (!key.startsWith(prefix)) return;
+      const entry = this.#entries.get(key) as Entry;
+      if (entry.expiresAt !== null && this.#now() >= entry.expiresAt) {
+        this.#delete(key); // splices at i, so the next key lands at i
+        continue;
+      }
+      i++;
+      yield key;
     }
   }
 }

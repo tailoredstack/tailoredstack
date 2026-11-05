@@ -23,14 +23,56 @@ async function main(): Promise<unknown> {
         { lockFor: 5_000, waitFor: 10_000 },
       );
     }
+    case "lock-hold-renew": {
+      // arg is "lockFor:holdMs". Holds for longer than lockFor, so only renewal keeps other processes out.
+      const [lockFor, holdMs] = arg.split(":").map(Number) as [number, number];
+      return cache.withoutOverlapping(
+        ["job"],
+        async () => {
+          await client.rpush(`${prefix}trace`, `enter:${process.pid}:${Date.now()}`);
+          await sleep(holdMs);
+          await client.rpush(`${prefix}trace`, `exit:${process.pid}:${Date.now()}`);
+          return "held";
+        },
+        { lockFor, waitFor: 10_000 },
+      );
+    }
     case "lock-crash": {
       // Take the lock and hang forever inside it. The parent SIGKILLs us: a real crash, no release.
       void cache.withoutOverlapping(["job"], () => new Promise(() => {}), { lockFor: Number(arg), waitFor: 0 });
       await client.set(`${prefix}crashed`, String(process.pid));
       return new Promise(() => {});
     }
+    case "jobs-write": {
+      // Writes `arg` keys under ["jobs", n], then marks the writer done in Redis.
+      for (let n = 0; n < Number(arg); n++) await cache.set(["jobs", n], n);
+      await client.set(`${prefix}writer-done`, "1");
+      return "written";
+    }
+    case "jobs-invalidate-loop": {
+      // Invalidates ["jobs"] while the writer runs, then once more after it is done. Polls Redis state, no sleeps.
+      let removed = 0;
+      while ((await client.exists(`${prefix}writer-done`)) === 0) {
+        removed += await cache.invalidate(["jobs"]);
+        await sleep(5);
+      }
+      removed += await cache.invalidate(["jobs"]);
+      return removed;
+    }
     case "lock-try": {
       return cache.withoutOverlapping(["job"], () => "got-it", { waitFor: 0 });
+    }
+    case "getorset-lock": {
+      // Miss on a shared key. Computes once across processes: counts computes in Redis, then sleeps.
+      return cache.getOrSet(
+        ["once"],
+        async () => {
+          await client.incr(`${prefix}computes`);
+          await sleep(Number(arg));
+          return "computed";
+        },
+        { lock: { lockFor: 5_000, waitFor: 10_000 } },
+      );
     }
     case "funnel-hold": {
       return cache.funnel(["api"], { limit: 2, waitFor: 10_000, lockFor: 5_000 }, async () => {

@@ -11,6 +11,13 @@ interface Row {
   expires_at: number | null;
 }
 
+// Exclusive upper bound of keys starting with `prefix`: last char + 1. Callers pass non-empty prefixes that end in
+// ASCII "]", "," or are "[" (see Cache.invalidate), so the bump stays inside one code unit and never overflows.
+const upperBound = (prefix: string) =>
+  prefix.slice(0, -1) + String.fromCharCode(prefix.charCodeAt(prefix.length - 1) + 1);
+
+const PREFIX_SQL = "SELECT key FROM cache WHERE key >= ? AND key < ? AND (expires_at IS NULL OR expires_at > ?)";
+
 export class SqliteStore implements Store {
   readonly #db: DatabaseSync;
   readonly #now: () => number;
@@ -23,9 +30,12 @@ export class SqliteStore implements Store {
   readonly #touch: StatementSync;
   readonly #all: StatementSync;
   readonly #forgetIf: StatementSync;
+  readonly #extendIf: StatementSync;
+  readonly #withPrefix: StatementSync;
 
   constructor({ path, now = Date.now }: SqliteStoreOptions) {
     this.#db = new DatabaseSync(path);
+    this.#db.exec("PRAGMA busy_timeout = 5000"); // wait for other processes' write locks instead of failing
     this.#now = now;
     this.#db.exec("CREATE TABLE IF NOT EXISTS cache (key TEXT PRIMARY KEY, value TEXT NOT NULL, expires_at INTEGER)");
     this.#select = this.#db.prepare("SELECT value FROM cache WHERE key = ? AND (expires_at IS NULL OR expires_at > ?)");
@@ -43,7 +53,11 @@ export class SqliteStore implements Store {
     this.#forgetIf = this.#db.prepare(
       "DELETE FROM cache WHERE key = ? AND value = ? AND (expires_at IS NULL OR expires_at > ?)",
     );
+    this.#extendIf = this.#db.prepare(
+      "UPDATE cache SET expires_at = ? WHERE key = ? AND value = ? AND (expires_at IS NULL OR expires_at > ?)",
+    );
     this.#all = this.#db.prepare("SELECT key, value FROM cache WHERE expires_at IS NULL OR expires_at > ?");
+    this.#withPrefix = this.#db.prepare(PREFIX_SQL);
   }
 
   #expiry(ttlMs: number | null): number | null {
@@ -80,15 +94,26 @@ export class SqliteStore implements Store {
     return this.#adjust(key, -by);
   }
 
-  // Synchronous node:sqlite calls: no await between read and write, so no in-process interleaving.
+  // BEGIN IMMEDIATE takes the write lock before the read, so other processes cannot interleave read-modify-write.
   #adjust(key: string, by: number): number {
-    this.#purge.run(key, this.#now());
-    const row = this.#row.get(key) as Row | undefined;
-    const current: unknown = row ? JSON.parse(row.value) : 0;
-    if (!Number.isInteger(current)) throw new TypeError(`Cache value at "${key}" is not an integer`);
-    const next = (current as number) + by;
-    this.#upsert.run(key, JSON.stringify(next), row?.expires_at ?? null);
-    return next;
+    this.#db.exec("BEGIN IMMEDIATE");
+    try {
+      this.#purge.run(key, this.#now());
+      const row = this.#row.get(key) as Row | undefined;
+      const current: unknown = row ? JSON.parse(row.value) : 0;
+      if (!Number.isInteger(current)) throw new TypeError(`Cache value at "${key}" is not an integer`);
+      const next = (current as number) + by;
+      this.#upsert.run(key, JSON.stringify(next), row?.expires_at ?? null);
+      this.#db.exec("COMMIT");
+      return next;
+    } catch (err) {
+      this.#db.exec("ROLLBACK");
+      throw err;
+    }
+  }
+
+  close(): void {
+    this.#db.close();
   }
 
   async touch(key: string, ttlMs: number): Promise<boolean> {
@@ -103,8 +128,27 @@ export class SqliteStore implements Store {
     return this.#forgetIf.run(key, JSON.stringify(expected), this.#now()).changes === 1;
   }
 
+  async extendIf(key: string, expected: unknown, ttlMs: number): Promise<boolean> {
+    const now = this.#now();
+    return this.#extendIf.run(now + ttlMs, key, JSON.stringify(expected), now).changes === 1;
+  }
+
   async *entries(): AsyncGenerator<{ key: string; value: unknown }> {
     const rows = this.#all.all(this.#now()) as unknown as { key: string; value: string }[];
     for (const row of rows) yield { key: row.key, value: JSON.parse(row.value) };
+  }
+
+  // Range scan on the primary-key index: O(matches). Never a table scan.
+  async *keysWithPrefix(prefix: string): AsyncGenerator<string> {
+    const rows = this.#withPrefix.all(prefix, upperBound(prefix), this.#now()) as unknown as { key: string }[];
+    for (const row of rows) yield row.key;
+  }
+
+  /** Test-only: EXPLAIN QUERY PLAN for keysWithPrefix. Not part of the public API. @internal */
+  explainKeysWithPrefix(prefix: string): string[] {
+    const rows = this.#db
+      .prepare(`EXPLAIN QUERY PLAN ${PREFIX_SQL}`)
+      .all(prefix, upperBound(prefix), this.#now()) as unknown as { detail: string }[];
+    return rows.map((row) => row.detail);
   }
 }

@@ -1,4 +1,4 @@
-import { Data, Effect } from "effect";
+import { type Cause, Data, Effect, Exit } from "effect";
 import {
   type Cache,
   type FunnelOptions,
@@ -15,6 +15,18 @@ export class CacheError extends Data.TaggedError("CacheError")<{
   readonly cause: unknown;
 }> {}
 
+/** Private: carries a caller Effect's failure Cause across the Promise boundary so its typed error is re-raised. */
+class CallbackFailure {
+  constructor(readonly cause: Cause.Cause<unknown>) {}
+}
+
+/** Runs a caller Effect as a Promise. Its failure is rethrown as CallbackFailure, never wrapped. */
+const runCallback = <A, E>(effect: Effect.Effect<A, E, never>): Promise<A> =>
+  Effect.runPromiseExit(effect).then((exit) => {
+    if (Exit.isSuccess(exit)) return exit.value;
+    throw new CallbackFailure(exit.cause);
+  });
+
 /** Effect-returning Cache. Driver and key failures surface as CacheError. */
 export class EffectCache {
   readonly #cache: Cache;
@@ -28,6 +40,20 @@ export class EffectCache {
       try: run,
       catch: (cause) => new CacheError({ operation, cause }),
     });
+  }
+
+  /** Callback failures re-raise unchanged; LockTimeoutError passes through; anything else is a CacheError. */
+  #guard<A, E, L extends LockTimeoutError = never>(
+    operation: string,
+    run: () => Promise<A>,
+  ): Effect.Effect<A, E | CacheError | L> {
+    return Effect.tryPromise({ try: run, catch: (cause) => cause }).pipe(
+      Effect.catch((cause): Effect.Effect<never, E | CacheError | L> => {
+        if (cause instanceof CallbackFailure) return Effect.failCause(cause.cause as Cause.Cause<E>);
+        if (cause instanceof LockTimeoutError) return Effect.fail(cause as L);
+        return Effect.fail(new CacheError({ operation, cause }));
+      }),
+    );
   }
 
   prefix(segments: KeyInput): EffectCache {
@@ -80,10 +106,7 @@ export class EffectCache {
     windows: [number, number],
     compute: Effect.Effect<A, E, never>,
   ): Effect.Effect<A, E | CacheError, never> {
-    return Effect.tryPromise({
-      try: () => this.#cache.flexible(key, windows, () => Effect.runPromise(compute)),
-      catch: (cause) => (cause instanceof CacheError ? cause : new CacheError({ operation: "flexible", cause })),
-    }) as Effect.Effect<A, E | CacheError, never>;
+    return this.#guard<A, E>("flexible", () => this.#cache.flexible(key, windows, () => runCallback(compute)));
   }
 
   withoutOverlapping<A, E, _R>(
@@ -91,11 +114,9 @@ export class EffectCache {
     callback: Effect.Effect<A, E, never>,
     options?: LockOptions,
   ): Effect.Effect<A, E | CacheError | LockTimeoutError, never> {
-    return Effect.tryPromise({
-      try: () => this.#cache.withoutOverlapping(key, () => Effect.runPromise(callback), options),
-      catch: (cause) =>
-        cause instanceof LockTimeoutError ? cause : new CacheError({ operation: "withoutOverlapping", cause }),
-    }) as Effect.Effect<A, E | CacheError | LockTimeoutError, never>;
+    return this.#guard<A, E, LockTimeoutError>("withoutOverlapping", () =>
+      this.#cache.withoutOverlapping(key, () => runCallback(callback), options),
+    );
   }
 
   /** At most `limit` Effects run concurrently for `key`. Exhaustion past `waitFor` is a LockTimeoutError. */
@@ -104,10 +125,9 @@ export class EffectCache {
     options: FunnelOptions,
     callback: Effect.Effect<A, E, never>,
   ): Effect.Effect<A, E | CacheError | LockTimeoutError, never> {
-    return Effect.tryPromise({
-      try: () => this.#cache.funnel(key, options, () => Effect.runPromise(callback)),
-      catch: (cause) => (cause instanceof LockTimeoutError ? cause : new CacheError({ operation: "funnel", cause })),
-    }) as Effect.Effect<A, E | CacheError | LockTimeoutError, never>;
+    return this.#guard<A, E, LockTimeoutError>("funnel", () =>
+      this.#cache.funnel(key, options, () => runCallback(callback)),
+    );
   }
 
   invalidate(filter: InvalidateFilter, options?: InvalidateOptions): Effect.Effect<number, CacheError> {

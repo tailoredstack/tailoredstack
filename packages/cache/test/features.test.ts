@@ -86,7 +86,7 @@ describe("touch and add", () => {
 describe("getOrSet with a ttl function", () => {
   it("derives ttl from the computed value", async () => {
     const { clock, cache } = setup();
-    await cache.getOrSet(["k"], () => 5, { ttl: (v) => v * 1000 });
+    await cache.getOrSet(["k"], () => 5, { ttl: (v) => (v as number) * 1000 });
     clock.advance(4999);
     expect(await cache.get(["k"])).toBe(5);
     clock.advance(1);
@@ -302,10 +302,11 @@ describe("withoutOverlapping (locks)", () => {
     expect(await cache.withoutOverlapping(["k"], () => 2, { waitFor: 0 })).toBe(2);
   });
 
-  it("a crashed holder's lock expires after lockFor and can be taken over", async () => {
+  it("a holder that never settles loses its lock after maxHoldFor and can be taken over", async () => {
     const cache = realCache();
-    void cache.withoutOverlapping(["k"], () => new Promise(() => {}), { lockFor: 50 });
-    await sleep(60);
+    // Renewal keeps a live holder's lock, so cap it: renewals stop at maxHoldFor and the lease lapses within lockFor.
+    void cache.withoutOverlapping(["k"], () => new Promise(() => {}), { lockFor: 50, maxHoldFor: 100 });
+    await sleep(200);
     expect(await cache.withoutOverlapping(["k"], () => "ok", { waitFor: 0 })).toBe("ok");
   });
 

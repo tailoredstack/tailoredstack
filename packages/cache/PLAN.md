@@ -8,7 +8,11 @@ Milestones:
 - 1 core (keys, Cache, EffectCache): done
 - 2 drivers, shared contract (memory, sqlite, redis): done
 - 3 exports and packaging (./effect, ./testing, optional peers): done
-- 4 tags (Redis only, compile-time gated): done
+- 4 tags (Redis only, compile-time gated): done, removed in 4b
+- 4b remove the tags API: array keys on every store, no UnsupportedError: done
+- 4c prefix index: array-key invalidate is O(matches) on memory, sqlite, redis. keysWithPrefix on the Store contract.
+  Memory: sorted key array. SQLite: primary-key range scan. Redis: index sets per child prefix, lazy prune.
+  Predicate invalidate stays a full scan.
 - 5 docs: README done; this file trimmed to status
 - 6 SQL stores (postgres, mysql, pglite): planned, see below
 
@@ -32,7 +36,6 @@ Design:
 - `forgetIf`: conditional DELETE.
 - MySQL: InnoDB key limit (~768 chars) is too short for JSON array keys. Use a SHA-256 primary key plus the full key in a column, so `entries()` still works.
 - Schema: `CREATE TABLE IF NOT EXISTS` on first use, table name option defaulting to `cache`.
-- Tags stay Redis-only.
 
 Testing:
 
@@ -50,6 +53,5 @@ Open decisions:
 
 Open decisions for v1:
 
-- Memory store tags (not in v0).
-- Cache-level tests against live Redis beyond tags: only the store contract and tags run there.
-- Tag rotation race: documented, not solved.
+- Cache-level tests against live Redis beyond invalidation: only the store contract and invalidation run there.
+- Redis index growth for keys without TTL: lazy prune only. Revisit if it shows up under load.

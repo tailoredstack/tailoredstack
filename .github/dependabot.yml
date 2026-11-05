@@ -5,6 +5,8 @@ updates:
     schedule:
       interval: weekly
     groups:
+      production-dependencies:
+        dependency-type: production
       dev-dependencies:
         dependency-type: development
     commit-message:
@@ -14,5 +16,9 @@ updates:
     directory: /
     schedule:
       interval: weekly
+    groups:
+      github-actions:
+        patterns:
+          - "*"
     commit-message:
       prefix: ci
