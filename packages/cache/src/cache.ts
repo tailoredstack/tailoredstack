@@ -85,8 +85,19 @@ const isEscaped = (raw: unknown): raw is EscapeEnvelope =>
 const needsEscape = (value: unknown): boolean =>
   typeof value === "object" && value !== null && (Object.hasOwn(value, FLEX) || Object.hasOwn(value, ESCAPE));
 
-const escapeValue = (value: unknown): unknown => (needsEscape(value) ? { [ESCAPE]: 1, v: value } : value);
+// Normalize through JSON first: a toJSON() can produce a shape that is not visible on the object itself.
+const escapeValue = (value: unknown): unknown => {
+  const plain: unknown = JSON.parse(JSON.stringify(value));
+  return needsEscape(plain) ? { [ESCAPE]: 1, v: plain } : plain;
+};
 const unescapeValue = (raw: unknown): unknown => (isEscaped(raw) ? raw.v : raw);
+
+/** Wait budgets are milliseconds: finite and non-negative. NaN would make the deadline never pass. */
+function assertWaitFor(waitFor: number | undefined): void {
+  if (waitFor !== undefined && (!Number.isFinite(waitFor) || waitFor < 0)) {
+    throw new RangeError(`waitFor must be a finite non-negative number of ms, got ${waitFor}`);
+  }
+}
 
 function assertTtl(ttl: number): void {
   if (!Number.isFinite(ttl) || ttl <= 0) throw new RangeError(`ttl must be a positive finite number of ms, got ${ttl}`);
@@ -244,7 +255,15 @@ export class Cache<S extends Store = Store> {
       return value;
     };
     if (!lock) return fill();
-    return this.withoutOverlapping(key, async () => (await this.get<T>(key)) ?? fill(), lock === true ? {} : lock);
+    // Under the lock, re-read: a cached null is a value, so only undefined means a miss.
+    return this.withoutOverlapping(
+      key,
+      async () => {
+        const hit = await this.get<T>(key);
+        return hit !== undefined ? hit : fill();
+      },
+      lock === true ? {} : lock,
+    );
   }
 
   async many(keys: KeyInput[]): Promise<(unknown | undefined)[]> {
@@ -355,6 +374,7 @@ export class Cache<S extends Store = Store> {
 
   /** Run `callback` while holding an exclusive lock on `key`. Waits up to `waitFor` ms, else LockTimeoutError. */
   async withoutOverlapping<T>(key: KeyInput, callback: () => T | Promise<T>, options: LockOptions = {}): Promise<T> {
+    assertWaitFor(options.waitFor);
     const lockKey = `lock:${this.#stored(key)}`;
     const token = `${Math.random()}:${this.#now()}`;
     await this.#acquire(lockKey, token, options, this.#full(key));
@@ -365,6 +385,7 @@ export class Cache<S extends Store = Store> {
   async funnel<T>(key: KeyInput, options: FunnelOptions, callback: () => T | Promise<T>): Promise<T> {
     if (!Number.isInteger(options.limit) || options.limit < 1)
       throw new RangeError(`limit must be a positive integer, got ${options.limit}`);
+    assertWaitFor(options.waitFor);
     const deadline = this.#now() + (options.waitFor ?? 0);
     const base = `funnel:${this.#stored(key)}`;
     for (;;) {

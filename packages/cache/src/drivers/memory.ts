@@ -136,19 +136,24 @@ export class MemoryStore implements Store {
   }
 
   /**
-   * Live keys starting with `prefix`, in sorted order. Expired keys met on the way are purged. Callers must not
-   * mutate the store while iterating: Cache.invalidate collects keys first, then forgets them.
+   * Live keys starting with `prefix`, in sorted order. Expired keys met on the way are purged.
+   * The matches are snapshotted before the first yield, so the caller may delete while iterating: an index held
+   * across yields would shift when an earlier key is removed, and the scan would skip matches.
    */
   async *keysWithPrefix(prefix: string): AsyncGenerator<string> {
-    for (let i = this.#lowerBound(prefix); i < this.#sorted.length; ) {
+    const matches: string[] = [];
+    for (let i = this.#lowerBound(prefix); i < this.#sorted.length; i++) {
       const key = this.#sorted[i] as string;
-      if (!key.startsWith(prefix)) return;
-      const entry = this.#entries.get(key) as Entry;
+      if (!key.startsWith(prefix)) break;
+      matches.push(key);
+    }
+    for (const key of matches) {
+      const entry = this.#entries.get(key);
+      if (!entry) continue; // deleted after the snapshot
       if (entry.expiresAt !== null && this.#now() >= entry.expiresAt) {
-        this.#delete(key); // splices at i, so the next key lands at i
+        this.#delete(key);
         continue;
       }
-      i++;
       yield key;
     }
   }
