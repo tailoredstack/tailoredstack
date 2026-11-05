@@ -1,6 +1,6 @@
 # @tailoredstack/cache
 
-One typed cache API over pluggable stores: memory, SQLite, and Redis/Valkey. TanStack-style array keys, fluent scoping, stale-while-revalidate, locks, and optional Redis tags.
+One typed cache API over pluggable stores: memory, SQLite, and Redis/Valkey. TanStack-style array keys, fluent scoping, stale-while-revalidate, locks, and prefix invalidation.
 
 The backend is an injected object (the same idea as Kysely's dialects). The core imports no driver, so you pay only for what you use.
 
@@ -56,7 +56,7 @@ await cache.invalidate({ predicate: (key) => key[0] === "post" });
 await cache.clear(); // invalidate([]): everything in this scope
 ```
 
-`invalidate` scans every entry in the store, so it costs O(N). Use one `Cache` per store, and use tags (below) when you invalidate often on Redis.
+`invalidate` scans every entry in the store, so it costs O(N). Use one `Cache` per store.
 
 ## Typed accessors
 
@@ -147,35 +147,6 @@ off();
 
 Listeners are shared across chained scopes, so one listener on the base cache sees writes from `prefix()` chains.
 
-## Tags (Redis / Valkey only)
-
-Tags let you flush a group of items in O(1), by rotating a tag id instead of scanning:
-
-```ts
-const cache = new Cache(new RedisStore({ client: redis }));
-
-await cache.tags(["user", "org:1"]).set(["profile", 1], profile, { ttl: 300_000 });
-await cache.tags(["user", "org:1"]).get(["profile", 1]);
-await cache.tags(["user"]).flush(); // every item tagged "user" becomes unreachable
-```
-
-`set` and `getOrSet` also take `{ tags }`, equal to `cache.tags(tags).set(key, value, { ttl })`:
-
-```ts
-await cache.set(["profile", 1], profile, { tags: ["user"], ttl: 300_000 });
-```
-
-The option type-checks only on a tagged-capable store. `MemoryStore` and `SqliteStore` reject `tags` at compile time, and at runtime throw `UnsupportedError`. Non-string keys are not converted to tags.
-
-Tags are a compile-time capability. `tags()` is only callable on a `Cache<TaggableStore>`, so `new Cache(new MemoryStore()).tags(...)` is a type error. Untyped JS callers get an `UnsupportedError` at runtime.
-
-Costs (Laravel-style, by design):
-
-- Each tag name leaves one small Redis key with no TTL. Tag ids accumulate.
-- Flushed items stay in Redis until their own TTL. **Always set a TTL on tagged items.**
-- A write that races a `flush()` can land under the old tag id and become unreachable. The next read misses; it does not return stale data.
-- `invalidate()` and `clear()` are rejected on tagged scopes. Use `flush()`.
-
 ## Drivers
 
 ```ts
@@ -207,8 +178,6 @@ storeContract("MyStore", (clock) => new MyStore({ now: clock.now }));
 
 `@tailoredstack/cache/testing` needs `vitest` as the test runner.
 
-To support tags, also implement `TaggableStore` (`tagId`, `rotateTag`). The Redis driver is the reference.
-
 ## Effect
 
 ```ts
@@ -231,8 +200,7 @@ Every method returns an `Effect`. Driver and key failures become `CacheError`. L
 ## Errors
 
 - `TypeError`: invalid key segment, invalid value (`undefined`), non-integer `increment`.
-- `RangeError`: non-positive or non-finite `ttl`, empty `tags([])`, invalid funnel `limit`.
-- `UnsupportedError`: `tags()` on a non-taggable store; `flush()` on an untagged cache; `invalidate()`/`clear()` on a tagged scope.
+- `RangeError`: non-positive or non-finite `ttl`, invalid funnel `limit`.
 - `LockTimeoutError`: `withoutOverlapping` or `funnel` could not acquire within `waitFor`.
 
 ## Testing your code
@@ -261,7 +229,7 @@ On Colima (macOS), Testcontainers' cleanup container can't mount the Colima sock
 TESTCONTAINERS_RYUK_DISABLED=true pnpm --filter @tailoredstack/cache test
 ```
 
-Type tests (`@ts-expect-error` gate on `tags()`) run separately:
+Type tests run separately:
 
 ```sh
 pnpm --filter @tailoredstack/cache typecheck
@@ -271,6 +239,5 @@ pnpm --filter @tailoredstack/cache typecheck
 
 - `invalidate()` is O(N) over the store.
 - `flexible` and `getOrSet` single-flight per process only.
-- Tags require Redis or Valkey. No tags on memory or SQLite.
 - Locks are advisory: a callback longer than `maxHoldFor` loses its lock, and its work can overlap with the next holder's.
 - Values are JSON. Dates come back as strings; store `toISOString()` or a number.
