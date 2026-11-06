@@ -240,15 +240,29 @@ export class SqsQueueDriver implements QueueDriver {
   }
 
   async #scanFailed(): Promise<void> {
-    const response = await this.#client.receiveMessage({
-      QueueUrl: this.#failedQueueUrl,
-      MaxNumberOfMessages: 10,
-      VisibilityTimeout: 0,
-    });
+    const records: Array<{ readonly body: Envelope; readonly receipt: string }> = [];
     this.#failedCache.clear();
     this.#failedReceipts.clear();
-    for (const message of response.Messages ?? []) {
-      const body = parseEnvelope(requiredString(message.Body, "SQS failed message body"));
+
+    // Temporarily hide each batch so the next ReceiveMessage call advances to the next page.
+    // Restore visibility to zero after the full scan; all received handles remain valid for mutation.
+    for (;;) {
+      const response = await this.#client.receiveMessage({
+        QueueUrl: this.#failedQueueUrl,
+        MaxNumberOfMessages: 10,
+        VisibilityTimeout: MAX_VISIBILITY,
+      });
+      const messages = response.Messages ?? [];
+      if (messages.length === 0) break;
+      for (const message of messages) {
+        records.push({
+          body: parseEnvelope(requiredString(message.Body, "SQS failed message body")),
+          receipt: requiredString(message.ReceiptHandle, "SQS failed ReceiptHandle"),
+        });
+      }
+    }
+
+    for (const { body, receipt } of records) {
       if (
         body.kind !== "failed" ||
         !body.id ||
@@ -265,23 +279,22 @@ export class SqsQueueDriver implements QueueDriver {
         error: body.error,
         failedAt: body.failedAt,
       });
-      this.#failedReceipts.set(body.id, requiredString(message.ReceiptHandle, "SQS failed ReceiptHandle"));
+      this.#failedReceipts.set(body.id, receipt);
     }
+    await Promise.all(
+      records.map(({ receipt }) =>
+        this.#client.changeMessageVisibility({
+          QueueUrl: this.#failedQueueUrl,
+          ReceiptHandle: receipt,
+          VisibilityTimeout: 0,
+        }),
+      ),
+    );
   }
 
   async #deleteFailed(id: string): Promise<boolean> {
-    if (!this.#failedCache.has(id)) return false;
-    const response = await this.#client.receiveMessage({
-      QueueUrl: this.#failedQueueUrl,
-      MaxNumberOfMessages: 10,
-      VisibilityTimeout: 0,
-    });
-    const message = response.Messages?.find((item) => {
-      const envelope = parseEnvelope(requiredString(item.Body, "SQS failed message body"));
-      return envelope.kind === "failed" && envelope.id === id;
-    });
-    if (!message) return false;
-    const receipt = requiredString(message.ReceiptHandle, "SQS failed ReceiptHandle");
+    const receipt = this.#failedReceipts.get(id);
+    if (!receipt || !this.#failedCache.has(id)) return false;
     await this.#client.deleteMessage({ QueueUrl: this.#failedQueueUrl, ReceiptHandle: receipt });
     this.#failedCache.delete(id);
     this.#failedReceipts.delete(id);
