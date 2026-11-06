@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import type { QueueCounts, QueueDriver } from "./driver.ts";
-import { checkJobOptions, isExhausted, type JobOptions } from "./options.ts";
+import { checkJobOptions, exhaustedReason, type JobOptions } from "./options.ts";
 import { ReservedJob } from "./reserved-job.ts";
 import { checkDuration, checkQueueName } from "./validate.ts";
 
@@ -13,6 +13,17 @@ export interface JobPayload {
 
 export interface LaterOptions {
   readonly queue?: string;
+}
+
+/** A job in the failed store, with its payload decoded. */
+export interface FailedJob {
+  readonly id: string;
+  readonly queue: string;
+  readonly name: string;
+  readonly data: unknown;
+  readonly attempts: number;
+  readonly error: string;
+  readonly failedAt: number;
 }
 
 export interface QueueOptions {
@@ -71,7 +82,7 @@ export class Queue {
 
   /**
    * Reserves the next ready job on a queue, or returns null when none is ready. A job already past
-   * its tries or retryUntil is dropped rather than returned.
+   * its tries or retryUntil is recorded as failed (with the reason) and skipped.
    */
   async pop(queue: string = this.#defaultQueue): Promise<ReservedJob | null> {
     const name = checkQueueName(queue);
@@ -82,7 +93,8 @@ export class Queue {
 
       const stored = JSON.parse(raw.payload) as StoredPayload;
       const options = stored.options ?? {};
-      if (!isExhausted(options, raw.attempts, this.#now())) {
+      const reason = exhaustedReason(options, raw.attempts, this.#now());
+      if (reason === null) {
         return new ReservedJob(
           {
             id: raw.id,
@@ -98,8 +110,8 @@ export class Queue {
           this.#now,
         );
       }
-      // This reservation is past the job's limits. We hold it, so we can drop the job now.
-      await this.#driver.remove(name, raw.id, raw.attempts, this.#now());
+      // Past the job's limits: we hold this reservation, so record the failure with its reason (TS-37).
+      await this.#driver.fail(name, raw.id, raw.attempts, this.#now(), `exhausted: ${reason}`);
     }
   }
 
@@ -119,6 +131,49 @@ export class Queue {
 
   reservedSize(queue: string = this.#defaultQueue): Promise<number> {
     return this.counts(queue).then((c) => c.reserved);
+  }
+
+  /** Failed jobs on one queue, or on every queue when none is named. Oldest failure first. */
+  async failed(queue?: string): Promise<FailedJob[]> {
+    const rows = await this.#driver.failedJobs(queue === undefined ? null : checkQueueName(queue));
+    return rows.map((row) => {
+      const stored = JSON.parse(row.payload) as StoredPayload;
+      return {
+        id: row.id,
+        queue: row.queue,
+        name: stored.name,
+        data: stored.data,
+        attempts: row.attempts,
+        error: row.error,
+        failedAt: row.failedAt,
+      };
+    });
+  }
+
+  /** Puts one failed job back on its queue, ready now, with its attempts reset. False when the id is unknown. */
+  retryFailed(id: string): Promise<boolean> {
+    return this.#driver.retryFailed(id, this.#now());
+  }
+
+  /** Retries every failed job on one queue, or on all queues when none is named. Returns the count. */
+  retryAllFailed(queue?: string): Promise<number> {
+    return this.#driver.retryAllFailed(queue === undefined ? null : checkQueueName(queue), this.#now());
+  }
+
+  /** Permanently deletes one failed record. False when the id is unknown. */
+  forgetFailed(id: string): Promise<boolean> {
+    return this.#driver.forgetFailed(id);
+  }
+
+  /** Deletes failed records on one queue, or on all queues when none is named. Returns the count. */
+  flushFailed(queue?: string): Promise<number> {
+    return this.#driver.flushFailed(queue === undefined ? null : checkQueueName(queue));
+  }
+
+  /** Deletes failed records that are older than `olderThanMs`. Returns the count. */
+  async pruneFailed(olderThanMs: number): Promise<number> {
+    checkDuration(olderThanMs, "olderThanMs");
+    return this.#driver.pruneFailed(this.#now() - olderThanMs);
   }
 
   private counts(queue: string): Promise<QueueCounts> {

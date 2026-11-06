@@ -13,6 +13,18 @@ export interface RawJob {
   readonly attempts: number;
 }
 
+/** A job recorded in the failed store. Same payload as the queued job, plus why and when it failed. */
+export interface RawFailedJob {
+  readonly id: string;
+  readonly queue: string;
+  readonly payload: string;
+  /** Reservations the job had when it failed. */
+  readonly attempts: number;
+  readonly error: string;
+  /** Epoch ms when the job was recorded as failed. */
+  readonly failedAt: number;
+}
+
 export interface QueueCounts {
   /** Ready to reserve now. */
   readonly pending: number;
@@ -45,6 +57,30 @@ export interface QueueDriver {
    * Returns false when the reservation was lost.
    */
   release(queue: string, id: string, attempts: number, now: number, availableAt: number): Promise<boolean>;
+
+  /**
+   * Removes a held job and records it in the failed store with `error`, under the same reservation
+   * check. Returns false when the reservation was lost, so a stale worker cannot record a failure.
+   */
+  fail(queue: string, id: string, attempts: number, now: number, error: string): Promise<boolean>;
+
+  /** Failed records on one queue, or on every queue when `queue` is null. */
+  failedJobs(queue: string | null): Promise<RawFailedJob[]>;
+
+  /** Moves one failed job back to its queue, ready now, with its attempts reset. */
+  retryFailed(id: string, now: number): Promise<boolean>;
+
+  /** Moves every failed job on one queue (or on all queues, when null) back to its queue. Returns the count. */
+  retryAllFailed(queue: string | null, now: number): Promise<number>;
+
+  /** Permanently deletes one failed record. */
+  forgetFailed(id: string): Promise<boolean>;
+
+  /** Deletes failed records on one queue (or on all queues, when null). Returns the count. */
+  flushFailed(queue: string | null): Promise<number>;
+
+  /** Deletes failed records recorded before `cutoff` (epoch ms). Returns the count. */
+  pruneFailed(cutoff: number): Promise<number>;
 
   /** Counts jobs on `queue` as of `now`. */
   counts(queue: string, now: number): Promise<QueueCounts>;
