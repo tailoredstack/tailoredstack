@@ -49,6 +49,11 @@ jobs:
     needs: release-please
     if: ${{ needs.release-please.outputs.releases_created == 'true' }}
     runs-on: ubuntu-latest
+    # Job-level permissions replace the top-level block, so restate contents. id-token lets npm
+    # exchange a GitHub OIDC token for a trusted-publishing credential. No NPM_TOKEN is used.
+    permissions:
+      contents: read
+      id-token: write
     steps:
       - name: Checkout 🛬
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -59,8 +64,6 @@ jobs:
         with:
           node-version-file: .nvmrc
           cache: pnpm
-          registry-url: https://registry.npmjs.org
-          scope: "@tailoredstack"
       - name: Install 📥
         run: pnpm install --frozen-lockfile
       - name: Build 📦
@@ -71,6 +74,4 @@ jobs:
         run: pnpm --filter @tailoredstack/cache test:e2e
       - name: Publish to npm 🚀
         working-directory: packages/cache
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
-        run: pnpm publish --no-git-checks --access public
+        run: npm publish --access public --provenance
