@@ -150,6 +150,18 @@ describe("stale attempts", () => {
 });
 
 describe("failed jobs", () => {
+  it("retryAllFailed processes all failed jobs across SQS receive pages", async () => {
+    const { driver } = setup();
+    for (let index = 0; index < 11; index += 1) {
+      await driver.insert("default", `job-${index}`, 0, 0);
+      const reserved = await driver.reserve("default", 0, 1_000);
+      if (!reserved) throw new Error(`expected reservation ${index}`);
+      expect(await driver.fail("default", reserved.id, 1, 0, "failed")).toBe(true);
+    }
+
+    expect(await driver.retryAllFailed(null, 0)).toBe(11);
+    expect(await driver.failedJobs(null)).toHaveLength(0);
+  });
   it("failed jobs are visible to a separate driver sharing the SQS failed queue", async () => {
     const client = new FakeSqsClient();
     const options = { client, queueUrl: (queue: string) => `https://sqs.test/${queue}`, failedQueueUrl: FAILED_URL };
