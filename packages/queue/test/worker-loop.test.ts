@@ -167,6 +167,39 @@ describe("runWorkerLoop", () => {
     expect(seen).toEqual(["Good"]);
   });
 
+  it("does not run a job reserved while stop was requested, and does not lose it", async () => {
+    // The driver reserves the job, but its reserve call resolves only after stop is requested.
+    class SlowReserveDriver extends CountingDriver {
+      release: (() => void) | undefined;
+      override async reserve(...args: Parameters<FakeDriver["reserve"]>) {
+        const raw = await super.reserve(...args);
+        await new Promise<void>((resolve) => {
+          this.release = resolve;
+        });
+        return raw;
+      }
+    }
+    const driver = new SlowReserveDriver();
+    const { queue } = setup(driver);
+    const controller = new AbortController();
+    const ran: string[] = [];
+    const q = queue.register({
+      Once: async () => {
+        ran.push("Once");
+      },
+    });
+    await q.push({ name: "Once" });
+
+    const done = runWorkerLoop({ queue, signal: controller.signal, pollInterval: 5, onError: () => {} });
+    await until(() => driver.release !== undefined);
+    controller.abort();
+    driver.release?.();
+    await done;
+
+    expect(ran).toEqual([]);
+    expect(await queue.size()).toBe(1);
+  });
+
   it("reports a driver pop error and waits an interval before polling again", async () => {
     class FailingDriver extends CountingDriver {
       override async reserve(...args: Parameters<FakeDriver["reserve"]>): Promise<never> {
