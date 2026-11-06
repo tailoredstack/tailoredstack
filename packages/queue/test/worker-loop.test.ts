@@ -127,7 +127,7 @@ describe("runWorkerLoop", () => {
         controller.abort();
       },
     });
-    await q.push({ name: "Bad" });
+    await q.push({ name: "Bad", options: { tries: 1 } });
     await q.push({ name: "Good" });
 
     await runWorkerLoop({
@@ -152,7 +152,7 @@ describe("runWorkerLoop", () => {
         controller.abort();
       },
     });
-    await q.push({ name: "Missing" });
+    await queue.push({ name: "Missing" });
     await q.push({ name: "Good" });
 
     await runWorkerLoop({
