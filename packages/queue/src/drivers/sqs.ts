@@ -48,6 +48,7 @@ interface Envelope {
   readonly attempts?: number;
   readonly error?: string;
   readonly failedAt?: number;
+  readonly scheduledAt?: number;
 }
 interface Lease {
   readonly queue: string;
@@ -104,6 +105,16 @@ export class SqsQueueDriver implements QueueDriver {
     const messageId = requiredString(message.MessageId, "SQS MessageId");
     const envelope = parseEnvelope(requiredString(message.Body, "SQS message body"));
     if (envelope.kind !== "job" || envelope.queue !== queue) throw new Error("unexpected SQS queue message");
+    if (envelope.scheduledAt !== undefined && envelope.scheduledAt > now) {
+      const remainingMs = envelope.scheduledAt - now;
+      await this.#client.sendMessage({
+        QueueUrl: this.#queueUrl(queue),
+        MessageBody: JSON.stringify(envelope),
+        DelaySeconds: Math.min(MAX_DELAY, Math.ceil(remainingMs / 1_000)),
+      });
+      await this.#client.deleteMessage({ QueueUrl: this.#queueUrl(queue), ReceiptHandle: id });
+      return null;
+    }
     const attempts = positiveInt((message.Attributes as Record<string, unknown> | undefined)?.ApproximateReceiveCount);
     this.#leases.set(id, { queue, messageId, payload: envelope.payload, attempts, reservedUntil });
     return { id, queue, payload: envelope.payload, attempts };
@@ -121,12 +132,11 @@ export class SqsQueueDriver implements QueueDriver {
     const lease = this.#held(queue, id, attempts, now);
     if (!lease) return false;
     const delayMs = availableAt - now;
-    if (delayMs > MAX_DELAY * 1_000) throw new RangeError("SQS delay cannot exceed 900 seconds");
     if (delayMs < 0) throw new RangeError("availableAt must not precede now");
     await this.#client.sendMessage({
       QueueUrl: this.#queueUrl(queue),
-      MessageBody: JSON.stringify({ kind: "job", queue, payload: lease.payload }),
-      ...(delayMs > 0 ? { DelaySeconds: Math.ceil(delayMs / 1_000) } : {}),
+      MessageBody: JSON.stringify({ kind: "job", queue, payload: lease.payload, scheduledAt: availableAt }),
+      ...(delayMs > 0 ? { DelaySeconds: Math.min(MAX_DELAY, Math.ceil(delayMs / 1_000)) } : {}),
     });
     await this.#client.deleteMessage({ QueueUrl: this.#queueUrl(queue), ReceiptHandle: id });
     this.#leases.delete(id);

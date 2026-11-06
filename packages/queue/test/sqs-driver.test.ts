@@ -63,6 +63,23 @@ describe("insert and reserve", () => {
   });
 });
 
+describe("release delays", () => {
+  it("honors release delays beyond SQS's 900-second per-message limit", async () => {
+    const { client, driver } = setup();
+    await driver.insert("default", "delayed", 0, 0);
+    const reserved = await driver.reserve("default", 0, 1_000);
+    if (!reserved) throw new Error("expected reservation");
+
+    expect(await driver.release("default", reserved.id, 1, 0, 901_000)).toBe(true);
+    client.clock = 900_000;
+    expect(await driver.reserve("default", 900_000, 901_000)).toBeNull();
+    client.clock = 900_999;
+    expect(await driver.reserve("default", 900_999, 901_999)).toBeNull();
+    client.clock = 901_000;
+    expect(await driver.reserve("default", 901_000, 902_000)).toMatchObject({ payload: "delayed", attempts: 1 });
+  });
+});
+
 describe("stale attempts", () => {
   it("remove, release and fail return false for an attempt that no longer holds the job", async () => {
     const { client, driver } = setup();
