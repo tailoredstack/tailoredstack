@@ -170,11 +170,11 @@ describe("runWorkerLoop", () => {
   it("does not run a job reserved while stop was requested, and does not lose it", async () => {
     // The driver reserves the job, but its reserve call resolves only after stop is requested.
     class SlowReserveDriver extends CountingDriver {
-      release: (() => void) | undefined;
+      resume: (() => void) | undefined;
       override async reserve(...args: Parameters<FakeDriver["reserve"]>) {
         const raw = await super.reserve(...args);
         await new Promise<void>((resolve) => {
-          this.release = resolve;
+          this.resume = resolve;
         });
         return raw;
       }
@@ -191,9 +191,9 @@ describe("runWorkerLoop", () => {
     await q.push({ name: "Once" });
 
     const done = runWorkerLoop({ queue, signal: controller.signal, pollInterval: 5, onError: () => {} });
-    await until(() => driver.release !== undefined);
+    await until(() => driver.resume !== undefined);
     controller.abort();
-    driver.release?.();
+    driver.resume?.();
     await done;
 
     expect(ran).toEqual([]);

@@ -37,6 +37,15 @@ export async function runWorkerLoop(options: WorkerLoopOptions): Promise<void> {
       await wait(pollInterval, signal);
       continue;
     }
+    // Stop was requested while pop was in flight. Hand the job back unrun so it is not lost.
+    if (signal.aborted) {
+      try {
+        await job.release(0);
+      } catch (error) {
+        onError(error);
+      }
+      return;
+    }
 
     try {
       await runJob(job, reportingHandler(queue.handlerFor(job.name), onError));
