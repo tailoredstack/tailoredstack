@@ -18,6 +18,8 @@ export interface ReservedJobInit {
   readonly data: unknown;
   readonly attempts: number;
   readonly options: JobOptions;
+  /** Epoch time when this worker's lease ends, on the queue's clock. */
+  readonly reservedUntil: number;
 }
 
 type Settled = "deleted" | "released" | "failed";
@@ -32,6 +34,7 @@ export class ReservedJob {
 
   readonly #attempts: number;
   readonly #options: JobOptions;
+  readonly #reservedUntil: number;
   readonly #driver: QueueDriver;
   readonly #now: () => number;
   #settled: Settled | null = null;
@@ -44,6 +47,7 @@ export class ReservedJob {
     this.data = init.data;
     this.#attempts = init.attempts;
     this.#options = init.options;
+    this.#reservedUntil = init.reservedUntil;
     this.#driver = driver;
     this.#now = now;
   }
@@ -51,6 +55,11 @@ export class ReservedJob {
   /** Reservations of this job, counting this one. */
   attempts(): number {
     return this.#attempts;
+  }
+
+  /** Milliseconds left on this worker's lease. Zero or less once it has expired. */
+  leaseRemaining(): number {
+    return this.#reservedUntil - this.#now();
   }
 
   payload(): { uuid: string; name: string; data: unknown } {
@@ -103,6 +112,15 @@ export class ReservedJob {
     const held = await this.#driver.release(this.queue, this.id, this.#attempts, now, now + wait);
     if (!held) throw new ReservationLostError(this.id);
     this.#settled = "released";
+  }
+
+  /**
+   * Releases the job only after its lease ends, or after its backoff if that is longer. Use this when an
+   * attempt timed out: the handler may still be running, so the job must not be reserved again first.
+   */
+  async releaseAfterLease(): Promise<void> {
+    const wait = Math.max(backoffFor(this.#options, this.#attempts), this.leaseRemaining(), 0);
+    await this.release(wait);
   }
 
   /**

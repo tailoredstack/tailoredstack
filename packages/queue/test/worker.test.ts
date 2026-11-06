@@ -62,7 +62,7 @@ describe("runJob outcomes", () => {
 
 describe("timeout enforcement", () => {
   it("aborts the signal and releases the job when the handler exceeds its timeout", async () => {
-    const { queue } = setup();
+    const { queue, advance } = setup();
     await queue.push({ name: "slow", options: { timeout: 20 } });
     const job = await reserve(queue);
 
@@ -75,6 +75,7 @@ describe("timeout enforcement", () => {
     expect(outcome).toBe("timed-out");
     expect(signal?.aborted).toBe(true);
     expect(job.isReleased()).toBe(true);
+    advance(90_000); // default retryAfter: the lease ends here
     expect((await reserve(queue)).attempts()).toBe(2);
   });
 
