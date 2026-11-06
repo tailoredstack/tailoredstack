@@ -3,6 +3,10 @@ import type { QueueCounts, QueueDriver } from "./driver.ts";
 import { checkJobOptions, exhaustedReason, type JobOptions } from "./options.ts";
 import { ReservedJob } from "./reserved-job.ts";
 import { checkDuration, checkQueueName } from "./validate.ts";
+import type { JobHandler } from "./worker.ts";
+
+/** Handlers keyed by job name, as passed to `Queue.register`. */
+export type JobHandlers = Readonly<Record<string, JobHandler>>;
 
 /** A job to push: a registered name, JSON-serializable data, and optional limits. */
 export interface JobPayload {
@@ -54,6 +58,7 @@ export class Queue {
   readonly #defaultQueue: string;
   readonly #retryAfter: number;
   readonly #now: () => number;
+  readonly #handlers = new Map<string, JobHandler>();
 
   constructor(options: QueueOptions) {
     this.#driver = options.driver;
@@ -61,6 +66,30 @@ export class Queue {
     this.#retryAfter = checkDuration(options.retryAfter ?? DEFAULT_RETRY_AFTER_MS, "retryAfter");
     if (this.#retryAfter <= 0) throw new RangeError("retryAfter must be greater than 0");
     this.#now = options.now ?? Date.now;
+  }
+
+  /**
+   * Registers a handler for each job name, e.g. `register({ SendInvoice: handler })`. A name can be
+   * registered once. Payloads are JSON, so the name is the only link from a stored job to its code.
+   */
+  register(handlers: JobHandlers): void {
+    for (const [name, handler] of Object.entries(handlers)) {
+      if (this.#handlers.has(name)) throw new Error(`job "${name}" is already registered`);
+      if (typeof handler !== "function") throw new TypeError(`handler for "${name}" must be a function`);
+      this.#handlers.set(name, handler);
+    }
+  }
+
+  /**
+   * The handler for a job name, for `runJob`. An unregistered name gets a handler that rejects, so the
+   * attempt is released for retry (or fails once its tries run out) instead of being dropped.
+   */
+  handlerFor(name: string): JobHandler {
+    const handler = this.#handlers.get(name);
+    if (handler) return handler;
+    return async () => {
+      throw new Error(`no handler registered for job "${name}"`);
+    };
   }
 
   /** Pushes a job onto the default queue, available now. */
