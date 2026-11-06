@@ -238,20 +238,42 @@ export class SqsQueueDriver implements QueueDriver {
   }
 
   async #scanFailed(): Promise<void> {
-    const response = await this.#client.receiveMessage({ QueueUrl: this.#failedQueueUrl, MaxNumberOfMessages: 10, VisibilityTimeout: 0 });
+    const response = await this.#client.receiveMessage({
+      QueueUrl: this.#failedQueueUrl,
+      MaxNumberOfMessages: 10,
+      VisibilityTimeout: 0,
+    });
     this.#failedCache.clear();
     this.#failedReceipts.clear();
     for (const message of response.Messages ?? []) {
       const body = parseEnvelope(requiredString(message.Body, "SQS failed message body"));
-      if (body.kind !== "failed" || !body.id || body.attempts === undefined || body.failedAt === undefined || body.error === undefined) continue;
-      this.#failedCache.set(body.id, { id: body.id, queue: body.queue, payload: body.payload, attempts: body.attempts, error: body.error, failedAt: body.failedAt });
+      if (
+        body.kind !== "failed" ||
+        !body.id ||
+        body.attempts === undefined ||
+        body.failedAt === undefined ||
+        body.error === undefined
+      )
+        continue;
+      this.#failedCache.set(body.id, {
+        id: body.id,
+        queue: body.queue,
+        payload: body.payload,
+        attempts: body.attempts,
+        error: body.error,
+        failedAt: body.failedAt,
+      });
       this.#failedReceipts.set(body.id, requiredString(message.ReceiptHandle, "SQS failed ReceiptHandle"));
     }
   }
 
   async #deleteFailed(id: string): Promise<boolean> {
     if (!this.#failedCache.has(id)) return false;
-    const response = await this.#client.receiveMessage({ QueueUrl: this.#failedQueueUrl, MaxNumberOfMessages: 10, VisibilityTimeout: 0 });
+    const response = await this.#client.receiveMessage({
+      QueueUrl: this.#failedQueueUrl,
+      MaxNumberOfMessages: 10,
+      VisibilityTimeout: 0,
+    });
     const message = response.Messages?.find((item) => {
       const envelope = parseEnvelope(requiredString(item.Body, "SQS failed message body"));
       return envelope.kind === "failed" && envelope.id === id;
@@ -263,7 +285,6 @@ export class SqsQueueDriver implements QueueDriver {
     this.#failedReceipts.delete(id);
     return true;
   }
-
 }
 
 function parseEnvelope(body: string): Envelope {
