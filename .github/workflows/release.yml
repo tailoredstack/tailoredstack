@@ -1,10 +1,8 @@
 name: "🚀 Release"
 
+# Manual only. Releases never run on push: start one from the Actions tab or with
+# gh workflow run release.yml --ref main
 on:
-  push:
-    branches:
-      - main
-  # Manual run from the Actions tab or: gh workflow run release.yml --ref main
   workflow_dispatch:
 
 permissions:
