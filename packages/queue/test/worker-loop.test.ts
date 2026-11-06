@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { Queue, runWorkerLoop, UnregisteredJobError } from "../src/index.ts";
 import { FakeDriver } from "./fake-driver.fake.ts";
+import { bad, BAD_MESSAGE, good, idiot, IDIOT_REASON } from "./actors.ts";
 
 const sleep = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms));
 
@@ -116,12 +117,10 @@ describe("runWorkerLoop", () => {
     const { queue } = setup();
     const controller = new AbortController();
     const errors: unknown[] = [];
-    const failure = new Error("boom");
+    const b = bad();
     const seen: string[] = [];
     const q = queue.register({
-      Bad: async () => {
-        throw failure;
-      },
+      Bad: b.handler,
       Good: async () => {
         seen.push("Good");
         controller.abort();
@@ -137,7 +136,7 @@ describe("runWorkerLoop", () => {
       onError: (error) => errors.push(error),
     });
 
-    expect(errors).toEqual([failure]);
+    expect(errors.map((e) => (e as Error).message)).toEqual([BAD_MESSAGE]);
     expect(seen).toEqual(["Good"]);
   });
 
@@ -227,5 +226,109 @@ describe("runWorkerLoop", () => {
     // One poll per 50 ms interval: about 2 in 100 ms. A hot loop would make hundreds.
     expect(driver.reserves - before).toBeLessThanOrEqual(4);
     expect(errors.every((e) => e instanceof Error && e.message === "driver down")).toBe(true);
+  });
+});
+
+describe("runWorkerLoop with named actors", () => {
+  it("runs a good job exactly once", async () => {
+    const { queue } = setup();
+    const g = good();
+    const q = queue.register({ Good: g.handler });
+    await q.push({ name: "Good", data: { n: 1 } });
+    const controller = new AbortController();
+    const done = runWorkerLoop({ queue, signal: controller.signal, pollInterval: 5, onError: () => {} });
+
+    await until(() => g.calls.length === 1);
+    controller.abort();
+    await done;
+
+    expect(g.calls).toEqual([{ name: "Good", data: { n: 1 } }]);
+  });
+
+  it("reports a bad job and keeps running to the next good job", async () => {
+    const { queue } = setup();
+    const b = bad();
+    const g = good();
+    const q = queue.register({ Bad: b.handler, Good: g.handler });
+    await q.push({ name: "Bad", options: { tries: 1 } });
+    await q.push({ name: "Good" });
+    const errors: unknown[] = [];
+    const controller = new AbortController();
+    const done = runWorkerLoop({
+      queue,
+      signal: controller.signal,
+      pollInterval: 5,
+      onError: (error) => errors.push(error),
+    });
+
+    await until(() => g.calls.length === 1);
+    controller.abort();
+    await done;
+
+    expect(b.calls).toHaveLength(1);
+    expect(errors.map((e) => (e as Error).message)).toEqual([BAD_MESSAGE]);
+    expect(g.calls).toHaveLength(1);
+  });
+
+  it("reports an idiot's thrown string and keeps running", async () => {
+    const { queue } = setup();
+    const i = idiot();
+    const g = good();
+    const q = queue.register({ Idiot: i.handler, Good: g.handler });
+    await q.push({ name: "Idiot", options: { tries: 1 } });
+    await q.push({ name: "Good" });
+    const errors: unknown[] = [];
+    const controller = new AbortController();
+    const done = runWorkerLoop({
+      queue,
+      signal: controller.signal,
+      pollInterval: 5,
+      onError: (error) => errors.push(error),
+    });
+
+    await until(() => g.calls.length === 1);
+    controller.abort();
+    await done;
+
+    expect(i.calls).toHaveLength(1);
+    expect(errors).toEqual([IDIOT_REASON]);
+    expect(g.calls).toHaveLength(1);
+  });
+
+  it("waits for an idiot attempt to settle on stop and reserves nothing after", async () => {
+    const driver = new CountingDriver();
+    const { queue } = setup(driver);
+    let open: () => void = () => {};
+    const gate = new Promise<void>((resolve) => {
+      open = resolve;
+    });
+    const i = idiot(gate);
+    const g = good();
+    const q = queue.register({ Idiot: i.handler, Good: g.handler });
+    await q.push({ name: "Idiot", options: { tries: 1 } });
+    await q.push({ name: "Good" });
+    const errors: unknown[] = [];
+    const controller = new AbortController();
+    let returned = false;
+    const done = runWorkerLoop({
+      queue,
+      signal: controller.signal,
+      pollInterval: 5,
+      onError: (error) => errors.push(error),
+    }).then(() => {
+      returned = true;
+    });
+
+    await until(() => i.calls.length === 1);
+    controller.abort();
+    await sleep(20);
+    expect(returned).toBe(false);
+
+    open();
+    await done;
+
+    expect(driver.reserves).toBe(1);
+    expect(g.calls).toHaveLength(0);
+    expect(errors).toEqual([IDIOT_REASON]);
   });
 });
