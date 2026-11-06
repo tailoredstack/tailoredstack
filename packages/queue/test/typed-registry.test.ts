@@ -54,3 +54,41 @@ describe("typed job registry", () => {
     expect(await queue.size()).toBe(1);
   });
 });
+
+describe("names derived from register", () => {
+  it("types the queue from the handler keys, so push accepts only registered names", async () => {
+    const queue = new Queue({ driver: new FakeDriver() }).register({
+      SendInvoice: async () => {},
+      Ping: async () => {},
+    });
+
+    await queue.push({ name: "SendInvoice" });
+    await queue.pushOn("mail", { name: "Ping" });
+
+    expect(await queue.size()).toBe(1);
+    expect(await queue.size("mail")).toBe(1);
+  });
+
+  it("rejects an unregistered name at compile time", () => {
+    const queue = new Queue({ driver: new FakeDriver() }).register({
+      SendInvoice: async () => {},
+    });
+    // @ts-expect-error CancelInvoice is not a registered job name
+    const attempt = () => queue.push({ name: "CancelInvoice" });
+    void attempt;
+  });
+
+  it("keeps every name across chained register calls", async () => {
+    const queue = new Queue({ driver: new FakeDriver() })
+      .register({ SendInvoice: async () => {} })
+      .register({ Ping: async () => {} });
+
+    await queue.push({ name: "SendInvoice" });
+    await queue.push({ name: "Ping" });
+    // @ts-expect-error CancelInvoice is not a registered job name
+    const attempt = () => queue.push({ name: "CancelInvoice" });
+    void attempt;
+
+    expect(await queue.size()).toBe(2);
+  });
+});
