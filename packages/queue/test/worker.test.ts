@@ -116,6 +116,23 @@ describe("timeout enforcement", () => {
   });
 });
 
+describe("lease after a timed-out attempt", () => {
+  it("keeps a timed-out job hidden until its reservation expires", async () => {
+    const { queue, advance } = setup();
+    await queue.push({ name: "stuck", options: { timeout: 20 } });
+    const job = await reserve(queue);
+
+    await runJob(job, neverSettles);
+    expect(await queue.pop()).toBeNull();
+
+    advance(89_999);
+    expect(await queue.pop()).toBeNull();
+
+    advance(1);
+    expect((await reserve(queue)).attempts()).toBe(2);
+  });
+});
+
 describe("handler errors", () => {
   it("releases the job with the backoff for the failed attempt when the handler throws", async () => {
     const { queue, advance } = setup();
