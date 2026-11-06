@@ -13,7 +13,7 @@
       "package-name": "@tailoredstack/queue",
       "component": "queue",
       "changelog-path": "CHANGELOG.md",
-      "release-as": "0.1.0"
+      "initial-version": "0.1.0"
     }
   }
 }
