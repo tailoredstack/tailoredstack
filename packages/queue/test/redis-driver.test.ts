@@ -80,6 +80,18 @@ describe("lease", () => {
   });
 });
 
+describe("expired lease keeps its place", () => {
+  it("returns an expired job before newer ready jobs, in its original availability order", async () => {
+    const { driver } = freshDriver();
+    const early = await driver.insert("q", "early", 100);
+    const late = await driver.insert("q", "late", 200);
+
+    expect((await driver.reserve("q", 300, 1_000))?.id).toBe(early); // leases early until 1000
+    expect((await driver.reserve("q", 300, 1_000))?.id).toBe(late); // leases late until 1000
+    expect(await driver.reserve("q", 1_000, 2_000)).toMatchObject({ id: early, attempts: 2 });
+  });
+});
+
 describe("stale attempts", () => {
   it("remove rejects a stale attempt and a lease that has ended", async () => {
     const { driver } = freshDriver();
