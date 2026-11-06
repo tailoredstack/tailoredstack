@@ -1,4 +1,5 @@
 import type { QueueDriver } from "./driver.ts";
+import { backoffFor, type JobOptions } from "./options.ts";
 import { checkDuration } from "./validate.ts";
 
 /** Thrown when this worker no longer holds the job: the reservation expired or another worker took it. */
@@ -16,6 +17,7 @@ export interface ReservedJobInit {
   readonly name: string;
   readonly data: unknown;
   readonly attempts: number;
+  readonly options: JobOptions;
 }
 
 type Settled = "deleted" | "released" | "failed";
@@ -29,6 +31,7 @@ export class ReservedJob {
   readonly data: unknown;
 
   readonly #attempts: number;
+  readonly #options: JobOptions;
   readonly #driver: QueueDriver;
   readonly #now: () => number;
   #settled: Settled | null = null;
@@ -40,6 +43,7 @@ export class ReservedJob {
     this.name = init.name;
     this.data = init.data;
     this.#attempts = init.attempts;
+    this.#options = init.options;
     this.#driver = driver;
     this.#now = now;
   }
@@ -53,17 +57,20 @@ export class ReservedJob {
     return { uuid: this.uuid, name: this.name, data: this.data };
   }
 
-  // Job options (tries, timeout, retryUntil) arrive with TS-29. Until then, no limit applies.
   maxTries(): number | null {
-    return null;
+    return this.#options.tries ?? null;
   }
 
   timeout(): number | null {
-    return null;
+    return this.#options.timeout ?? null;
   }
 
   retryUntil(): number | null {
-    return null;
+    return this.#options.retryUntil ?? null;
+  }
+
+  failOnTimeout(): boolean {
+    return this.#options.failOnTimeout ?? false;
   }
 
   isDeleted(): boolean {
@@ -84,12 +91,16 @@ export class ReservedJob {
     await this.#remove("deleted");
   }
 
-  /** Makes the job ready again after `delay` milliseconds. */
-  async release(delay = 0): Promise<void> {
-    checkDuration(delay, "delay");
+  /**
+   * Makes the job ready again after `delay` milliseconds. With no delay, waits the backoff for the
+   * attempt that just failed.
+   */
+  async release(delay?: number): Promise<void> {
+    const wait = delay ?? backoffFor(this.#options, this.#attempts);
+    checkDuration(wait, "delay");
     this.#assertOpen();
     const now = this.#now();
-    const held = await this.#driver.release(this.queue, this.id, this.#attempts, now, now + delay);
+    const held = await this.#driver.release(this.queue, this.id, this.#attempts, now, now + wait);
     if (!held) throw new ReservationLostError(this.id);
     this.#settled = "released";
   }

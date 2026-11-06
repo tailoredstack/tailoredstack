@@ -43,10 +43,10 @@ describe("option validation at push", () => {
 
   it("rejects a backoff array shorter than tries - 1", async () => {
     const { queue } = setup();
-    await expect(queue.push({ name: "x", options: { tries: 4, backoff: [1_000, 2_000] } })).rejects.toThrow(
-      RangeError,
-    );
-    await expect(queue.push({ name: "x", options: { tries: 4, backoff: [1_000, 2_000, 3_000] } })).resolves.toBeUndefined();
+    await expect(queue.push({ name: "x", options: { tries: 4, backoff: [1_000, 2_000] } })).rejects.toThrow(RangeError);
+    await expect(
+      queue.push({ name: "x", options: { tries: 4, backoff: [1_000, 2_000, 3_000] } }),
+    ).resolves.toBeUndefined();
   });
 
   it("rejects a backoff array when tries is not set, since its length cannot be checked", async () => {
