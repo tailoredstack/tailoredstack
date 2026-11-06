@@ -112,6 +112,11 @@ function encode(job: JobPayload): string {
     if (raw instanceof Date && Number.isNaN(raw.getTime())) {
       throw new TypeError(`job "${job.name}" data contains an invalid Date`);
     }
+    // A custom toJSON can return a Date. The replacer sees the Date itself, which JSON would store as {}.
+    if (value instanceof Date) {
+      if (Number.isNaN(value.getTime())) throw new TypeError(`job "${job.name}" data contains an invalid Date`);
+      return value.toISOString();
+    }
     if (typeof value === "number" && !Number.isFinite(value)) {
       throw new TypeError(`job "${job.name}" data contains a non-finite number (${value})`);
     }

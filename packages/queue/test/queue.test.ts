@@ -173,6 +173,20 @@ describe("payload validation", () => {
     expect(await queue.pop()).toBeNull();
   });
 
+  it("rejects an invalid Date returned from a custom toJSON", async () => {
+    const { queue } = setup();
+    const data = { due: { toJSON: () => new Date("not a date") } };
+    await expect(queue.push({ name: "Invoice", data })).rejects.toThrow(TypeError);
+    expect(await queue.pop()).toBeNull();
+  });
+
+  it("stores a valid Date returned from a custom toJSON as its ISO string", async () => {
+    const { queue } = setup();
+    const data = { due: { toJSON: () => new Date("2026-11-06T00:00:00Z") } };
+    await queue.push({ name: "Invoice", data });
+    expect(await queue.pop()).toMatchObject({ data: { due: "2026-11-06T00:00:00.000Z" } });
+  });
+
   it("stores a valid Date as its ISO string", async () => {
     const { queue } = setup();
     await queue.push({ name: "Invoice", data: { due: new Date("2026-11-06T00:00:00Z") } });
