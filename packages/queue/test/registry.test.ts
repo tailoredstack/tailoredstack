@@ -3,7 +3,7 @@ import { Queue, type ReservedJob, runJob } from "../src/index.ts";
 import { FakeDriver } from "./fake-driver.fake.ts";
 
 function setup() {
-  let now = 1_000;
+  const now = 1_000;
   const driver = new FakeDriver();
   const queue = new Queue({ driver, now: () => now });
   return { queue, driver };
@@ -67,6 +67,8 @@ describe("job registry", () => {
 
   it("rejects a value that is not a function", () => {
     const { queue } = setup();
-    expect(() => queue.register({ SendInvoice: "not a handler" as unknown as () => void })).toThrow(/handler for "SendInvoice" must be a function/);
+    expect(() => queue.register({ SendInvoice: "not a handler" as unknown as () => void })).toThrow(
+      /handler for "SendInvoice" must be a function/,
+    );
   });
 });
