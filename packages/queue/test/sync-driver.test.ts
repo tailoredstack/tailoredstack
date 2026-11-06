@@ -109,4 +109,16 @@ describe("sync driver", () => {
     expect(fromSync?.data).toEqual(fromWorker?.data);
     expect(fromSync?.maxTries()).toBe(fromWorker?.maxTries());
   });
+
+  it.each([
+    ["fail", (job: ReservedJob) => job.fail(new Error("card declined"))],
+    ["release", (job: ReservedJob) => job.release(5_000)],
+    ["delete", (job: ReservedJob) => job.delete()],
+  ])("rejects %s() from an inline job, so a handler cannot report success silently", async (_name, settle) => {
+    const { queue } = setup(async (job) => {
+      await settle(job);
+    });
+
+    await expect(queue.push({ name: "Charge" })).rejects.toThrow(/inline/);
+  });
 });
