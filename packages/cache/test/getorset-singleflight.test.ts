@@ -19,3 +19,11 @@ describe("getOrSet single-flights concurrent misses in one process", () => {
     expect(computes).toBe(1);
   });
 });
+
+describe("getOrSet single-flight does not cache or share a failed compute", () => {
+  it("a failed single-flight compute is not shared with the next caller", async () => {
+    const cache = new Cache(new MemoryStore());
+    await expect(cache.getOrSet(["s"], () => Promise.reject(new Error("first")))).rejects.toThrow("first");
+    expect(await cache.getOrSet(["s"], () => "second")).toBe("second");
+  });
+});

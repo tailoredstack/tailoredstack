@@ -251,3 +251,29 @@ describe("Cache fluent API", () => {
     await expect(cache.prefix(["u"]).get([Number.NaN])).rejects.toThrow(TypeError);
   });
 });
+
+describe("compute errors are not cached", () => {
+  it("getOrSet propagates the compute error and the next call recomputes", async () => {
+    const { cache } = setup();
+    let calls = 0;
+    const compute = () => {
+      calls++;
+      if (calls === 1) throw new Error("upstream down");
+      return "ok";
+    };
+    await expect(cache.getOrSet(["k"], compute)).rejects.toThrow("upstream down");
+    expect(await cache.get(["k"])).toBeUndefined();
+    expect(await cache.getOrSet(["k"], compute)).toBe("ok");
+    expect(calls).toBe(2);
+  });
+
+  it("flexible propagates a compute error on a miss and stores nothing", async () => {
+    const { cache } = setup();
+    await expect(
+      cache.flexible(["f"], [1000, 2000], () => {
+        throw new Error("boom");
+      }),
+    ).rejects.toThrow("boom");
+    expect(await cache.get(["f"])).toBeUndefined();
+  });
+});

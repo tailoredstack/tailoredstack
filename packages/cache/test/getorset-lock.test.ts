@@ -61,3 +61,14 @@ describe("getOrSet with lock (in-process)", () => {
     expect(await cache.get("k")).toBeUndefined();
   });
 });
+
+describe("getOrSet lock: a failed compute releases the lock", () => {
+  it("a failed locked compute stores nothing and releases the lock for the next caller", async () => {
+    const cache = new Cache(new MemoryStore());
+    await expect(
+      cache.getOrSet(["k"], () => Promise.reject(new Error("boom")), { lock: { waitFor: 0 } }),
+    ).rejects.toThrow("boom");
+    expect(await cache.get(["k"])).toBeUndefined();
+    expect(await cache.getOrSet(["k"], () => "ok", { lock: { waitFor: 0 } })).toBe("ok");
+  });
+});
