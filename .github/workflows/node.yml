@@ -11,7 +11,39 @@ permissions:
   contents: read
 
 jobs:
-  check:
+  # Decides per package: a package's jobs run only when a file under packages/<name>/ changed.
+  changes:
+    runs-on: ubuntu-latest
+    outputs:
+      cache: ${{ steps.filter.outputs.cache }}
+      queue: ${{ steps.filter.outputs.queue }}
+    steps:
+      - name: Checkout 🛬
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+      - name: Detect changed packages 🔎
+        id: filter
+        env:
+          BASE: ${{ github.event_name == 'pull_request' && github.event.pull_request.base.sha || github.event.before }}
+        run: |
+          zero=0000000000000000000000000000000000000000
+          if [ -z "$BASE" ] || [ "$BASE" = "$zero" ]; then
+            # New branch or unknown base: treat everything as changed.
+            changed=$(git ls-tree -r --name-only HEAD)
+          else
+            changed=$(git diff --name-only "$BASE" HEAD)
+          fi
+          for p in cache queue; do
+            if grep -q "^packages/$p/" <<< "$changed"; then
+              echo "$p=true" >> "$GITHUB_OUTPUT"
+            else
+              echo "$p=false" >> "$GITHUB_OUTPUT"
+            fi
+          done
+
+  # Repo-wide Biome check. Fast, and covers root config and workflow files that no package owns.
+  root:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout 🛬
@@ -26,15 +58,11 @@ jobs:
       - name: Install 📥
         run: pnpm install --frozen-lockfile
       - name: Lint 💅
-        run: pnpm lint
-      - name: Typecheck 🔎
-        run: pnpm typecheck
-      - name: Build 📦
-        run: pnpm build
-      - name: Test ✅
-        run: pnpm test
+        run: pnpm exec biome check .
 
-  e2e:
+  cache:
+    needs: changes
+    if: needs.changes.outputs.cache == 'true'
     runs-on: ubuntu-latest
     steps:
       - name: Checkout 🛬
@@ -48,7 +76,34 @@ jobs:
           cache: pnpm
       - name: Install 📥
         run: pnpm install --frozen-lockfile
+      - name: Typecheck 🔎
+        run: pnpm --filter @tailoredstack/cache typecheck
       - name: Build 📦
         run: pnpm --filter @tailoredstack/cache build
+      - name: Test ✅
+        run: pnpm --filter @tailoredstack/cache test
       - name: E2E against real stores 🧪
         run: pnpm --filter @tailoredstack/cache test:e2e
+
+  queue:
+    needs: changes
+    if: needs.changes.outputs.queue == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout 🛬
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Setup pnpm 📦
+        uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
+      - name: Setup Node ⚙️
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version-file: .nvmrc
+          cache: pnpm
+      - name: Install 📥
+        run: pnpm install --frozen-lockfile
+      - name: Typecheck 🔎
+        run: pnpm --filter @tailoredstack/queue typecheck
+      - name: Build 📦
+        run: pnpm --filter @tailoredstack/queue build
+      - name: Test ✅
+        run: pnpm --filter @tailoredstack/queue test
