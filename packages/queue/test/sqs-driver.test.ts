@@ -80,6 +80,21 @@ describe("release delays", () => {
   });
 });
 
+describe("release delivery guarantees", () => {
+  it("documents at-least-once duplication if deleting after re-send fails", async () => {
+    const { client, driver } = setup();
+    await driver.insert("default", "work", 0, 0);
+    const reserved = await driver.reserve("default", 0, 1_000);
+    if (!reserved) throw new Error("expected reservation");
+
+    client.failNextDelete = true;
+    await expect(driver.release("default", reserved.id, 1, 0, 0)).rejects.toThrow("injected delete failure");
+    expect(await driver.reserve("default", 0, 1_000)).toMatchObject({ payload: "work" });
+    client.clock = 1_000;
+    expect(await driver.reserve("default", 1_000, 2_000)).toMatchObject({ payload: "work" });
+  });
+});
+
 describe("stale attempts", () => {
   it("remove, release and fail return false for an attempt that no longer holds the job", async () => {
     const { client, driver } = setup();

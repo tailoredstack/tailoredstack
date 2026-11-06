@@ -28,6 +28,7 @@ export interface SqsCall {
  */
 export class FakeSqsClient implements SqsClient {
   clock = 0;
+  failNextDelete = false;
   readonly calls: SqsCall[] = [];
   readonly #queues = new Map<string, Message[]>();
   #seq = 0;
@@ -73,6 +74,10 @@ export class FakeSqsClient implements SqsClient {
 
   async deleteMessage(input: DeleteInput): Promise<unknown> {
     this.calls.push({ op: "DeleteMessage", input: { ...input } });
+    if (this.failNextDelete) {
+      this.failNextDelete = false;
+      throw new Error("injected delete failure");
+    }
     const queue = this.#queue(input.QueueUrl);
     const index = queue.findIndex((m) => m.receipt === input.ReceiptHandle);
     if (index < 0) throw new Error("ReceiptHandleIsInvalid");

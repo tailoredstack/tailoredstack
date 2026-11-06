@@ -133,6 +133,8 @@ export class SqsQueueDriver implements QueueDriver {
     if (!lease) return false;
     const delayMs = availableAt - now;
     if (delayMs < 0) throw new RangeError("availableAt must not precede now");
+    // SQS has no transaction spanning SendMessage and DeleteMessage. Send first to avoid losing
+    // work if sending fails; if the subsequent delete fails, both copies may be delivered (at least once).
     await this.#client.sendMessage({
       QueueUrl: this.#queueUrl(queue),
       MessageBody: JSON.stringify({ kind: "job", queue, payload: lease.payload, scheduledAt: availableAt }),
