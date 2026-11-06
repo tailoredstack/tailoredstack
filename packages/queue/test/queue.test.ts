@@ -163,6 +163,22 @@ describe("payload validation", () => {
     expect(await queue.pop()).toBeNull();
   });
 
+  it("rejects an invalid Date instead of storing it as null", async () => {
+    const { queue } = setup();
+    await expect(queue.push({ name: "Invoice", data: { due: new Date("not a date") } })).rejects.toThrow(TypeError);
+    await expect(queue.push({ name: "Invoice", data: { order: { placed: new Date("x") } } })).rejects.toThrow(
+      TypeError,
+    );
+    await expect(queue.push({ name: "Invoice", data: [new Date("x")] })).rejects.toThrow(TypeError);
+    expect(await queue.pop()).toBeNull();
+  });
+
+  it("stores a valid Date as its ISO string", async () => {
+    const { queue } = setup();
+    await queue.push({ name: "Invoice", data: { due: new Date("2026-11-06T00:00:00Z") } });
+    expect(await queue.pop()).toMatchObject({ data: { due: "2026-11-06T00:00:00.000Z" } });
+  });
+
   it("stores missing data as null", async () => {
     const { queue } = setup();
     await queue.push({ name: "x" });
