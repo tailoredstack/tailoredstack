@@ -51,6 +51,7 @@
     "lint:fix": "biome check --write src test e2e vitest.config.ts vitest.e2e.config.ts"
   },
   "devDependencies": {
+    "@biomejs/biome": "^2.6.5",
     "@testcontainers/redis": "^12.2.1",
     "@testcontainers/valkey": "^12.2.1",
     "@types/node": "^26.6.6",

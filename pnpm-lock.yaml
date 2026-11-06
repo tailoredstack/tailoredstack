@@ -181,6 +181,9 @@ importers:
 
   packages/cache:
     devDependencies:
+      '@biomejs/biome':
+        specifier: ^2.6.5
+        version: 2.6.5
       '@testcontainers/redis':
         specifier: ^12.2.1
         version: 12.2.1(bare-buffer@3.7.1)
