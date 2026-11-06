@@ -1,8 +1,11 @@
 name: "🐢 Node"
 
 on:
-  push:
   pull_request:
+  # Rebase-merged PRs land on main as new commits, which fires push, not pull_request.
+  push:
+    branches:
+      - main
 
 permissions:
   contents: read
