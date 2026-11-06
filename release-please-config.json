@@ -6,7 +6,6 @@
       "release-type": "node",
       "package-name": "@tailoredstack/cache",
       "component": "cache",
-      "release-as": "0.1.0",
       "changelog-path": "CHANGELOG.md"
     }
   }
