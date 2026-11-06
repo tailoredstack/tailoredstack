@@ -4,5 +4,7 @@ export type { FailedJob, JobHandlers, JobPayload, LaterOptions, QueueOptions } f
 export { Queue } from "./queue.ts";
 export type { ReservedJobInit } from "./reserved-job.ts";
 export { ReservationLostError, ReservedJob } from "./reserved-job.ts";
+export type { SyncHandler } from "./sync-driver.ts";
+export { SyncDriver } from "./sync-driver.ts";
 export type { JobHandler, JobOutcome } from "./worker.ts";
 export { runJob, UnregisteredJobError } from "./worker.ts";
