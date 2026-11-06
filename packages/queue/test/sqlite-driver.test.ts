@@ -264,7 +264,8 @@ describe("concurrency across processes", () => {
           const ready = new Promise<void>((r) => (markReady = r));
           const ids: string[] = [];
           const done = new Promise<string[]>((finish, reject) => {
-            createInterface({ input: child.stdout! }).on("line", (line) => {
+            if (!child.stdout) throw new Error("worker has no stdout");
+            createInterface({ input: child.stdout }).on("line", (line) => {
               if (line === "ready") markReady();
               else ids.push(JSON.parse(line) as string);
             });
@@ -278,7 +279,10 @@ describe("concurrency across processes", () => {
 
     // Release both children only after both have opened their drivers.
     await Promise.all(started.map((run) => run.ready));
-    for (const child of children) child.stdin!.write("go\n");
+    for (const child of children) {
+      if (!child.stdin) throw new Error("worker has no stdin");
+      child.stdin.write("go\n");
+    }
 
     const perChild = await Promise.all(started.map((run) => run.ids));
     for (const ids of perChild) expect(ids.length).toBeGreaterThan(0);
@@ -298,9 +302,8 @@ describe("concurrency in one process (not a cross-connection proof)", () => {
 
     const a = new SqliteQueueDriver({ path });
     const b = new SqliteQueueDriver({ path });
-    const drivers = [a, b];
     const reserved = await Promise.all(
-      Array.from({ length: 80 }, (_, i) => drivers[i % 2]!.reserve("default", 1_000, 2_000)),
+      Array.from({ length: 80 }, (_, i) => (i % 2 === 0 ? a : b).reserve("default", 1_000, 2_000)),
     );
 
     const got = reserved.filter((job) => job !== null).map((job) => job.id);
