@@ -25,6 +25,14 @@
     "lint": "biome check src test vitest.config.ts",
     "lint:fix": "biome check --write src test vitest.config.ts"
   },
+  "peerDependencies": {
+    "ioredis": "^6.0.0"
+  },
+  "peerDependenciesMeta": {
+    "ioredis": {
+      "optional": true
+    }
+  },
   "devDependencies": {
     "@biomejs/biome": "^2.6.5",
     "@testcontainers/redis": "^12.2.1",
