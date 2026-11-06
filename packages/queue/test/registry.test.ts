@@ -75,4 +75,20 @@ describe("job registry", () => {
       /handler for "SendInvoice" must be a function/,
     );
   });
+
+  it("treats a registered handler that throws UnregisteredJobError for another name as an ordinary error", async () => {
+    const { queue } = setup();
+    queue.register({
+      Outer: async () => {
+        throw new UnregisteredJobError("NotHere");
+      },
+    });
+    await queue.push({ name: "Outer", options: { tries: 3 } });
+    const job = await reserve(queue);
+
+    expect(await runJob(job, queue.handlerFor(job.name))).toBe("errored");
+    expect(job.isReleased()).toBe(true);
+    expect(job.hasFailed()).toBe(false);
+    expect(await queue.failed()).toEqual([]);
+  });
 });
