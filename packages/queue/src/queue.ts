@@ -47,6 +47,14 @@ export interface QueueOptions {
   readonly now?: () => number;
 }
 
+/**
+ * The names a queue accepts after `register`. An untyped queue (`string`) becomes exactly the newly registered
+ * names; a typed queue adds them to the names it already has.
+ */
+export type RegisteredNames<Current extends string, Added extends string> = string extends Current
+  ? Added
+  : Current | Added;
+
 const DEFAULT_QUEUE = "default";
 const DEFAULT_RETRY_AFTER_MS = 90_000;
 
@@ -75,13 +83,17 @@ export class Queue<Name extends string = string> {
   /**
    * Registers a handler for each job name, e.g. `register({ SendInvoice: handler })`. A name can be
    * registered once. Payloads are JSON, so the name is the only link from a stored job to its code.
+   *
+   * Returns this queue typed by the registered names, so `push` rejects any other name at compile time.
+   * Chained calls add their names to the set.
    */
-  register(handlers: JobHandlers): void {
+  register<H extends JobHandlers>(handlers: H): Queue<RegisteredNames<Name, Extract<keyof H, string>>> {
     for (const [name, handler] of Object.entries(handlers)) {
       if (this.#handlers.has(name)) throw new Error(`job "${name}" is already registered`);
       if (typeof handler !== "function") throw new TypeError(`handler for "${name}" must be a function`);
       this.#handlers.set(name, handler);
     }
+    return this as unknown as Queue<RegisteredNames<Name, Extract<keyof H, string>>>;
   }
 
   /**
