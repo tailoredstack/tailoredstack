@@ -16,8 +16,20 @@ export type JobOutcome = "completed" | "errored" | "timed-out";
 export type JobHandler = (job: ReservedJob, signal: AbortSignal) => unknown;
 
 /**
+ * Thrown for a job whose name has no registered handler. No handler can run it until one is registered,
+ * so runJob fails it on the first attempt instead of retrying.
+ */
+export class UnregisteredJobError extends Error {
+  constructor(name: string) {
+    super(`no handler registered for job "${name}"`);
+    this.name = "UnregisteredJobError";
+  }
+}
+
+/**
  * Runs one reserved job and settles it. Each job is settled exactly once, here, so callers do not
- * call delete, release, or fail themselves.
+ * call delete, release, or fail themselves. An unregistered job is failed and then UnregisteredJobError
+ * is thrown to the caller.
  *
  * The timeout uses the real clock (setTimeout), not the queue's injected clock. retryAfter must stay
  * above timeout so the reservation does not expire while the handler runs.
@@ -26,11 +38,12 @@ export async function runJob(job: ReservedJob, handler: JobHandler): Promise<Job
   const controller = new AbortController();
   const limit = job.timeout();
 
-  // Never rejects: a handler that throws, including synchronously, resolves to "errored".
-  const attempt = new Promise<"completed" | "errored">((resolve) => {
+  // Never rejects: a handler that throws, including synchronously, resolves to "errored". The one exception
+  // is UnregisteredJobError, which is surfaced so the job can be failed rather than retried.
+  const attempt = new Promise<"completed" | "errored" | UnregisteredJobError>((resolve) => {
     new Promise<unknown>((settle) => settle(handler(job, controller.signal))).then(
       () => resolve("completed"),
-      () => resolve("errored"),
+      (error: unknown) => resolve(error instanceof UnregisteredJobError ? error : "errored"),
     );
   });
 
@@ -45,6 +58,11 @@ export async function runJob(job: ReservedJob, handler: JobHandler): Promise<Job
 
   const result = await Promise.race([attempt, deadline]);
   clearTimeout(timer);
+
+  if (result instanceof UnregisteredJobError) {
+    await job.fail(result);
+    throw result;
+  }
 
   if (result === "completed") {
     await job.delete();
