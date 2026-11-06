@@ -56,11 +56,14 @@ export function checkJobOptions(options: JobOptions, retryAfter: number): JobOpt
   return options;
 }
 
-/** True when a reservation at `now` is past the job's limits, so the job must be dropped, not run. */
-export function isExhausted(options: JobOptions, attempts: number, now: number): boolean {
-  if (options.tries !== undefined && attempts > options.tries) return true;
-  if (options.retryUntil !== undefined && now >= options.retryUntil) return true;
-  return false;
+/**
+ * Why a reservation at `now` is past the job's limits: "tries" or "retryUntil". Null when the job may run.
+ * The job is recorded as failed with this reason, not run and not dropped silently.
+ */
+export function exhaustedReason(options: JobOptions, attempts: number, now: number): "tries" | "retryUntil" | null {
+  if (options.tries !== undefined && attempts > options.tries) return "tries";
+  if (options.retryUntil !== undefined && now >= options.retryUntil) return "retryUntil";
+  return null;
 }
 
 /** Wait before the next attempt, for the attempt that just failed. Zero when no backoff applies. */

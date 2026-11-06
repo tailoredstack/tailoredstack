@@ -10,6 +10,13 @@ export class ReservationLostError extends Error {
   }
 }
 
+/** Text stored for a failure: an Error's message, the string form of any other value, or "failed". */
+function errorText(error: unknown): string {
+  if (error instanceof Error) return error.message;
+  if (error === undefined) return "failed";
+  return String(error);
+}
+
 export interface ReservedJobInit {
   readonly id: string;
   readonly uuid: string;
@@ -124,12 +131,15 @@ export class ReservedJob {
   }
 
   /**
-   * Removes the job and marks it failed. The error is accepted for the failed-jobs store (TS-37),
-   * which records it; this step only takes the job out of the queue.
+   * Removes the job from the queue and records it in the failed store, with the error's message, the
+   * string form of a non-Error value, or "failed" when no error is given. Throws ReservationLostError when
+   * this worker no longer holds the job.
    */
-  async fail(_error?: unknown): Promise<void> {
+  async fail(error?: unknown): Promise<void> {
     this.#assertOpen();
-    await this.#remove("failed");
+    const held = await this.#driver.fail(this.queue, this.id, this.#attempts, this.#now(), errorText(error));
+    if (!held) throw new ReservationLostError(this.id);
+    this.#settled = "failed";
   }
 
   async #remove(outcome: Settled): Promise<void> {
