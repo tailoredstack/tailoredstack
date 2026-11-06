@@ -86,7 +86,7 @@ describe("options on the reserved job", () => {
 });
 
 describe("tries", () => {
-  it("removes a job whose next reservation would exceed tries, instead of running it", async () => {
+  it("records a job whose next reservation would exceed tries as failed, instead of running it", async () => {
     const { queue } = setup();
     await queue.push({ name: "x", options: { tries: 2 } });
 
@@ -98,6 +98,7 @@ describe("tries", () => {
 
     expect(await queue.pop()).toBeNull();
     expect(await queue.size()).toBe(0);
+    expect(await queue.failed()).toEqual([expect.objectContaining({ attempts: 3, error: "exhausted: tries" })]);
   });
 
   it("runs a job with no tries limit however many times it is reserved", async () => {
@@ -120,13 +121,14 @@ describe("retryUntil", () => {
     expect(await queue.pop()).toMatchObject({ name: "x" });
   });
 
-  it("removes a job reserved after its deadline, instead of running it", async () => {
+  it("records a job reserved after its deadline as failed, instead of running it", async () => {
     const { queue, advance } = setup();
     await queue.push({ name: "x", options: { retryUntil: 2_000 } });
 
     advance(1_500); // now is 2_500, past the deadline
     expect(await queue.pop()).toBeNull();
     expect(await queue.size()).toBe(0);
+    expect(await queue.failed()).toEqual([expect.objectContaining({ attempts: 1, error: "exhausted: retryUntil" })]);
   });
 });
 
