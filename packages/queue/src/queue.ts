@@ -106,7 +106,12 @@ function encode(job: JobPayload): string {
   }
   // JSON writes NaN and Infinity as null, so a handler would see a value it never pushed. The replacer
   // runs at every depth on the post-toJSON value, so nested numbers are checked too.
-  const data = JSON.stringify(job.data ?? null, (_key, value: unknown) => {
+  const data = JSON.stringify(job.data ?? null, function (key, value: unknown) {
+    // toJSON has already run, so an invalid Date is already null here. The holder still has the original.
+    const raw: unknown = this[key];
+    if (raw instanceof Date && Number.isNaN(raw.getTime())) {
+      throw new TypeError(`job "${job.name}" data contains an invalid Date`);
+    }
     if (typeof value === "number" && !Number.isFinite(value)) {
       throw new TypeError(`job "${job.name}" data contains a non-finite number (${value})`);
     }
