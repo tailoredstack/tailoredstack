@@ -1,4 +1,5 @@
 export type { QueueCounts, QueueDriver, RawJob } from "./driver.ts";
+export type { JobOptions } from "./options.ts";
 export type { JobPayload, LaterOptions, QueueOptions } from "./queue.ts";
 export { Queue } from "./queue.ts";
 export type { ReservedJobInit } from "./reserved-job.ts";

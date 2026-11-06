@@ -1,12 +1,14 @@
 import { randomUUID } from "node:crypto";
-import type { QueueCounts, QueueDriver, RawJob } from "./driver.ts";
+import type { QueueCounts, QueueDriver } from "./driver.ts";
+import { checkJobOptions, isExhausted, type JobOptions } from "./options.ts";
 import { ReservedJob } from "./reserved-job.ts";
 import { checkDuration, checkQueueName } from "./validate.ts";
 
-/** A job to push: a registered name plus JSON-serializable data. */
+/** A job to push: a registered name, JSON-serializable data, and optional limits. */
 export interface JobPayload {
   readonly name: string;
   readonly data?: unknown;
+  readonly options?: JobOptions;
 }
 
 export interface LaterOptions {
@@ -29,6 +31,13 @@ export interface QueueOptions {
 const DEFAULT_QUEUE = "default";
 const DEFAULT_RETRY_AFTER_MS = 90_000;
 
+interface StoredPayload {
+  readonly uuid: string;
+  readonly name: string;
+  readonly data: unknown;
+  readonly options?: JobOptions;
+}
+
 export class Queue {
   readonly #driver: QueueDriver;
   readonly #defaultQueue: string;
@@ -39,6 +48,7 @@ export class Queue {
     this.#driver = options.driver;
     this.#defaultQueue = checkQueueName(options.defaultQueue ?? DEFAULT_QUEUE);
     this.#retryAfter = checkDuration(options.retryAfter ?? DEFAULT_RETRY_AFTER_MS, "retryAfter");
+    if (this.#retryAfter <= 0) throw new RangeError("retryAfter must be greater than 0");
     this.#now = options.now ?? Date.now;
   }
 
@@ -49,21 +59,47 @@ export class Queue {
 
   /** Pushes a job onto a named queue, available now. */
   async pushOn(queue: string, job: JobPayload): Promise<void> {
-    await this.#driver.insert(checkQueueName(queue), encode(job), this.#now());
+    await this.#driver.insert(checkQueueName(queue), encode(job, this.#retryAfter), this.#now());
   }
 
   /** Pushes a job that becomes available after `delay` milliseconds. */
   async later(delay: number, job: JobPayload, options: LaterOptions = {}): Promise<void> {
     const queue = checkQueueName(options.queue ?? this.#defaultQueue);
     const availableAt = this.#now() + checkDuration(delay, "delay");
-    await this.#driver.insert(queue, encode(job), availableAt);
+    await this.#driver.insert(queue, encode(job, this.#retryAfter), availableAt);
   }
 
-  /** Reserves the next ready job on a queue, or returns null when none is ready. */
+  /**
+   * Reserves the next ready job on a queue, or returns null when none is ready. A job already past
+   * its tries or retryUntil is dropped rather than returned.
+   */
   async pop(queue: string = this.#defaultQueue): Promise<ReservedJob | null> {
-    const now = this.#now();
-    const raw = await this.#driver.reserve(checkQueueName(queue), now, now + this.#retryAfter);
-    return raw === null ? null : decode(raw, this.#driver, this.#now);
+    const name = checkQueueName(queue);
+    for (;;) {
+      const now = this.#now();
+      const raw = await this.#driver.reserve(name, now, now + this.#retryAfter);
+      if (raw === null) return null;
+
+      const stored = JSON.parse(raw.payload) as StoredPayload;
+      const options = stored.options ?? {};
+      if (!isExhausted(options, raw.attempts, this.#now())) {
+        return new ReservedJob(
+          {
+            id: raw.id,
+            uuid: stored.uuid,
+            queue: raw.queue,
+            name: stored.name,
+            data: stored.data,
+            attempts: raw.attempts,
+            options,
+          },
+          this.#driver,
+          this.#now,
+        );
+      }
+      // This reservation is past the job's limits. We hold it, so we can drop the job now.
+      await this.#driver.remove(name, raw.id, raw.attempts, this.#now());
+    }
   }
 
   /** Total jobs on a queue: pending, delayed, and reserved. */
@@ -89,13 +125,7 @@ export class Queue {
   }
 }
 
-interface StoredPayload {
-  readonly uuid: string;
-  readonly name: string;
-  readonly data: unknown;
-}
-
-function encode(job: JobPayload): string {
+function encode(job: JobPayload, retryAfter: number): string {
   if (typeof job.name !== "string" || job.name.length === 0) {
     throw new TypeError("job name must be a non-empty string");
   }
@@ -119,22 +149,7 @@ function encode(job: JobPayload): string {
   });
   // JSON.stringify(fn) is undefined and would otherwise be dropped silently. Reject it instead.
   if (data === undefined) throw new TypeError(`job "${job.name}" data is not JSON-serializable`);
+  const options = checkJobOptions(job.options ?? {}, retryAfter);
   // The uuid is fixed at push, so every reservation of the job reports the same one.
-  return `{"uuid":${JSON.stringify(randomUUID())},"name":${JSON.stringify(job.name)},"data":${data}}`;
-}
-
-function decode(raw: RawJob, driver: QueueDriver, now: () => number): ReservedJob {
-  const stored = JSON.parse(raw.payload) as StoredPayload;
-  return new ReservedJob(
-    {
-      id: raw.id,
-      uuid: stored.uuid,
-      queue: raw.queue,
-      name: stored.name,
-      data: stored.data,
-      attempts: raw.attempts,
-    },
-    driver,
-    now,
-  );
+  return `{"uuid":${JSON.stringify(randomUUID())},"name":${JSON.stringify(job.name)},"data":${data},"options":${JSON.stringify(options)}}`;
 }
