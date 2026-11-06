@@ -115,14 +115,16 @@ export class Queue<Name extends string = string> {
 
   /** Pushes a job onto a named queue, available now. */
   async pushOn(queue: string, job: JobPayload<Name>): Promise<void> {
-    await this.#driver.insert(checkQueueName(queue), encode(job, this.#retryAfter), this.#now());
+    const now = this.#now();
+    await this.#driver.insert(checkQueueName(queue), encode(job, this.#retryAfter), now, now);
   }
 
   /** Pushes a job that becomes available after `delay` milliseconds. */
   async later(delay: number, job: JobPayload<Name>, options: LaterOptions = {}): Promise<void> {
     const queue = checkQueueName(options.queue ?? this.#defaultQueue);
-    const availableAt = this.#now() + checkDuration(delay, "delay");
-    await this.#driver.insert(queue, encode(job, this.#retryAfter), availableAt);
+    const now = this.#now();
+    const availableAt = now + checkDuration(delay, "delay");
+    await this.#driver.insert(queue, encode(job, this.#retryAfter), availableAt, now);
   }
 
   /**
