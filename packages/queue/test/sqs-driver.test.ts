@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { SqsQueueDriver } from "../src/drivers/sqs.ts";
+import { Queue } from "../src/queue.ts";
 import { FakeSqsClient } from "./fake-sqs-client.fake.ts";
 
 const FAILED_URL = "https://sqs.test/failed";
@@ -15,6 +16,24 @@ function setup() {
   });
   return { client, driver };
 }
+
+describe("SQS backoff validation", () => {
+  it("rejects any backoff entry above 900s at push before storing the job", async () => {
+    const { client, driver } = setup();
+    const queue = new Queue({ driver, now: () => 0 });
+
+    await expect(queue.push({ name: "retry", options: { tries: 3, backoff: [100, MAX_DELAY_MS + 1] } })).rejects.toThrow(RangeError);
+    expect(client.calls.filter((call) => call.op === "SendMessage")).toHaveLength(0);
+  });
+
+  it("accepts a backoff exactly at 900s", async () => {
+    const { client, driver } = setup();
+    const queue = new Queue({ driver, now: () => 0 });
+
+    await expect(queue.push({ name: "retry", options: { tries: 2, backoff: MAX_DELAY_MS } })).resolves.toBeUndefined();
+    expect(client.calls.filter((call) => call.op === "SendMessage")).toHaveLength(1);
+  });
+});
 
 describe("insert and reserve", () => {
   it("returns an inserted job on reserve with attempts 1", async () => {
@@ -64,19 +83,14 @@ describe("insert and reserve", () => {
 });
 
 describe("release delays", () => {
-  it("honors release delays beyond SQS's 900-second per-message limit", async () => {
+  it("rejects an explicit release delay above 900s instead of clamping", async () => {
     const { client, driver } = setup();
     await driver.insert("default", "delayed", 0, 0);
     const reserved = await driver.reserve("default", 0, 1_000);
     if (!reserved) throw new Error("expected reservation");
 
-    expect(await driver.release("default", reserved.id, 1, 0, 901_000)).toBe(true);
-    client.clock = 900_000;
-    expect(await driver.reserve("default", 900_000, 901_000)).toBeNull();
-    client.clock = 900_999;
-    expect(await driver.reserve("default", 900_999, 901_999)).toBeNull();
-    client.clock = 901_000;
-    expect(await driver.reserve("default", 901_000, 902_000)).toMatchObject({ payload: "delayed", attempts: 1 });
+    await expect(driver.release("default", reserved.id, 1, 0, 901_000)).rejects.toThrow(/900/);
+    expect(client.calls.filter((call) => call.op === "SendMessage")).toHaveLength(1);
   });
 });
 
