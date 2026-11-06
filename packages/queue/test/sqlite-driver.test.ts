@@ -1,6 +1,9 @@
+import { spawn } from "node:child_process";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { createInterface } from "node:readline";
+import { fileURLToPath } from "node:url";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { SqliteQueueDriver } from "../src/drivers/sqlite.ts";
 
@@ -242,7 +245,49 @@ describe("counts", () => {
   });
 });
 
-describe("concurrency", () => {
+describe("concurrency across processes", () => {
+  it("two processes reserving from one file never get the same job", async () => {
+    const seed = new SqliteQueueDriver({ path });
+    const pushed = new Set<string>();
+    for (let i = 0; i < 300; i++) pushed.add(await seed.insert("default", String(i), 0));
+
+    const worker = fileURLToPath(new URL("./fixtures/reserve-worker.ts", import.meta.url));
+    const children = [0, 1].map(() =>
+      spawn(process.execPath, [worker, path, "default"], { stdio: ["pipe", "pipe", "inherit"] }),
+    );
+
+    // One reader per child: "ready" once its driver is open, then job ids until it exits.
+    const runs = children.map(
+      (child) =>
+        new Promise<{ ready: Promise<void>; ids: Promise<string[]> }>((resolve) => {
+          let markReady!: () => void;
+          const ready = new Promise<void>((r) => (markReady = r));
+          const ids: string[] = [];
+          const done = new Promise<string[]>((finish, reject) => {
+            createInterface({ input: child.stdout! }).on("line", (line) => {
+              if (line === "ready") markReady();
+              else ids.push(JSON.parse(line) as string);
+            });
+            child.on("error", reject);
+            child.on("close", (code) => (code === 0 ? finish(ids) : reject(new Error(`worker exit ${code}`))));
+          });
+          resolve({ ready, ids: done });
+        }),
+    );
+    const started = await Promise.all(runs);
+
+    // Release both children only after both have opened their drivers.
+    await Promise.all(started.map((run) => run.ready));
+    for (const child of children) child.stdin!.write("go\n");
+
+    const got = (await Promise.all(started.map((run) => run.ids))).flat();
+    expect(got).toHaveLength(pushed.size);
+    expect(new Set(got).size).toBe(got.length);
+    expect(new Set(got)).toEqual(pushed);
+  });
+});
+
+describe("concurrency in one process (not a cross-connection proof)", () => {
   it("two driver instances on one file never reserve the same job", async () => {
     const seed = new SqliteQueueDriver({ path });
     const ids = new Set<string>();
