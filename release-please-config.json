@@ -7,6 +7,12 @@
       "package-name": "@tailoredstack/cache",
       "component": "cache",
       "changelog-path": "CHANGELOG.md"
+    },
+    "packages/queue": {
+      "release-type": "node",
+      "package-name": "@tailoredstack/queue",
+      "component": "queue",
+      "changelog-path": "CHANGELOG.md"
     }
   }
 }

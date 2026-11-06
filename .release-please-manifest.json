@@ -1,3 +1,4 @@
 {
-  "packages/cache": "0.1.0"
+  "packages/cache": "0.1.0",
+  "packages/queue": "0.0.0"
 }
