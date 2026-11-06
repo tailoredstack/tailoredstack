@@ -86,13 +86,25 @@ export class SyncDriver implements QueueDriver {
   }
 }
 
-/** Settling an inline job has nothing to remove or release, so every settle call succeeds. */
+/**
+ * An inline job has no lease. Settling it is an error: a handler that reports failure must throw, so the
+ * error reaches push. Returning success here would make push resolve for a job that did not succeed.
+ */
+const NO_LEASE = (action: string): Error =>
+  new Error(`inline jobs have no lease, so ${action}() is not allowed: throw from the handler to fail the job`);
+
 const inlineLease: QueueDriver = {
   insert: async () => "",
   reserve: async () => null,
-  remove: async () => true,
-  release: async () => true,
-  fail: async () => true,
+  remove: async () => {
+    throw NO_LEASE("delete");
+  },
+  release: async () => {
+    throw NO_LEASE("release");
+  },
+  fail: async () => {
+    throw NO_LEASE("fail");
+  },
   failedJobs: async () => [],
   retryFailed: async () => false,
   retryAllFailed: async () => 0,
