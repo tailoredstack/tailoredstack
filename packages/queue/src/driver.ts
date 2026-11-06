@@ -39,11 +39,10 @@ export interface QueueDriver {
   insert(queue: string, payload: string, availableAt: number, now?: number): Promise<string>;
 
   /**
-   * Atomically reserves the oldest ready job on `queue`, if any.
-   * A reserved job stays hidden until `reservedUntil`; if it is not released or deleted by then,
-   * it becomes ready again.
+   * Atomically reserves the oldest ready job on `queue`, if any. A reserved job stays hidden until
+   * `reservedUntil`; if it is not released or deleted by then, it becomes ready again. The returned
+   * `id` may be a reservation-scoped receipt handle; only this reservation may use it.
    */
-  /** The returned `id` may be a reservation-scoped receipt handle; only this reservation may use it. */
   reserve(queue: string, now: number, reservedUntil: number): Promise<RawJob | null>;
 
   /**
