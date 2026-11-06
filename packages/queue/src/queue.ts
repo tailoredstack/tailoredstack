@@ -104,8 +104,15 @@ function encode(job: JobPayload): string {
   if (typeof job.name !== "string" || job.name.length === 0) {
     throw new TypeError("job name must be a non-empty string");
   }
+  // JSON writes NaN and Infinity as null, so a handler would see a value it never pushed. The replacer
+  // runs at every depth on the post-toJSON value, so nested numbers are checked too.
+  const data = JSON.stringify(job.data ?? null, (_key, value: unknown) => {
+    if (typeof value === "number" && !Number.isFinite(value)) {
+      throw new TypeError(`job "${job.name}" data contains a non-finite number (${value})`);
+    }
+    return value;
+  });
   // JSON.stringify(fn) is undefined and would otherwise be dropped silently. Reject it instead.
-  const data = JSON.stringify(job.data ?? null);
   if (data === undefined) throw new TypeError(`job "${job.name}" data is not JSON-serializable`);
   return `{"name":${JSON.stringify(job.name)},"data":${data}}`;
 }
