@@ -1,18 +1,12 @@
+import { randomUUID } from "node:crypto";
 import type { QueueCounts, QueueDriver, RawJob } from "./driver.ts";
+import { ReservedJob } from "./reserved-job.ts";
+import { checkDuration, checkQueueName } from "./validate.ts";
 
 /** A job to push: a registered name plus JSON-serializable data. */
 export interface JobPayload {
   readonly name: string;
   readonly data?: unknown;
-}
-
-/** A job reserved by `pop`. Delete, release, and fail arrive with the reserved-job API. */
-export interface ReservedJob {
-  readonly id: string;
-  readonly queue: string;
-  readonly name: string;
-  readonly data: unknown;
-  readonly attempts: number;
 }
 
 export interface LaterOptions {
@@ -69,7 +63,7 @@ export class Queue {
   async pop(queue: string = this.#defaultQueue): Promise<ReservedJob | null> {
     const now = this.#now();
     const raw = await this.#driver.reserve(checkQueueName(queue), now, now + this.#retryAfter);
-    return raw === null ? null : decode(raw);
+    return raw === null ? null : decode(raw, this.#driver, this.#now);
   }
 
   /** Total jobs on a queue: pending, delayed, and reserved. */
@@ -96,6 +90,7 @@ export class Queue {
 }
 
 interface StoredPayload {
+  readonly uuid: string;
   readonly name: string;
   readonly data: unknown;
 }
@@ -124,30 +119,22 @@ function encode(job: JobPayload): string {
   });
   // JSON.stringify(fn) is undefined and would otherwise be dropped silently. Reject it instead.
   if (data === undefined) throw new TypeError(`job "${job.name}" data is not JSON-serializable`);
-  return `{"name":${JSON.stringify(job.name)},"data":${data}}`;
+  // The uuid is fixed at push, so every reservation of the job reports the same one.
+  return `{"uuid":${JSON.stringify(randomUUID())},"name":${JSON.stringify(job.name)},"data":${data}}`;
 }
 
-function decode(raw: RawJob): ReservedJob {
+function decode(raw: RawJob, driver: QueueDriver, now: () => number): ReservedJob {
   const stored = JSON.parse(raw.payload) as StoredPayload;
-  return {
-    id: raw.id,
-    queue: raw.queue,
-    name: stored.name,
-    data: stored.data,
-    attempts: raw.attempts,
-  };
-}
-
-function checkQueueName(queue: string): string {
-  if (typeof queue !== "string" || queue.length === 0) {
-    throw new TypeError("queue name must be a non-empty string");
-  }
-  return queue;
-}
-
-function checkDuration(ms: number, label: string): number {
-  if (!Number.isFinite(ms) || ms < 0) {
-    throw new RangeError(`${label} must be a finite number of milliseconds >= 0`);
-  }
-  return ms;
+  return new ReservedJob(
+    {
+      id: raw.id,
+      uuid: stored.uuid,
+      queue: raw.queue,
+      name: stored.name,
+      data: stored.data,
+      attempts: raw.attempts,
+    },
+    driver,
+    now,
+  );
 }

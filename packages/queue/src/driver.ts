@@ -33,6 +33,19 @@ export interface QueueDriver {
    */
   reserve(queue: string, now: number, reservedUntil: number): Promise<RawJob | null>;
 
+  /**
+   * Removes a job if the caller still holds its reservation: `attempts` matches the stored
+   * attempt count and the reservation has not expired at `now`. Returns false otherwise, so a
+   * stale worker cannot remove a job another worker reserved.
+   */
+  remove(queue: string, id: string, attempts: number, now: number): Promise<boolean>;
+
+  /**
+   * Makes a job ready again at `availableAt`, under the same reservation check as `remove`.
+   * Returns false when the reservation was lost.
+   */
+  release(queue: string, id: string, attempts: number, now: number, availableAt: number): Promise<boolean>;
+
   /** Counts jobs on `queue` as of `now`. */
   counts(queue: string, now: number): Promise<QueueCounts>;
 }
