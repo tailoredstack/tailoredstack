@@ -155,6 +155,14 @@ describe("payload validation", () => {
     expect(await queue.pop()).toBeNull();
   });
 
+  it("rejects non-finite numbers in data instead of storing them as null", async () => {
+    const { queue } = setup();
+    await expect(queue.push({ name: "Charge", data: { amount: Number.NaN } })).rejects.toThrow(TypeError);
+    await expect(queue.push({ name: "Charge", data: { cap: Number.POSITIVE_INFINITY } })).rejects.toThrow(TypeError);
+    await expect(queue.push({ name: "Charge", data: [1, [Number.NEGATIVE_INFINITY]] })).rejects.toThrow(TypeError);
+    expect(await queue.pop()).toBeNull();
+  });
+
   it("stores missing data as null", async () => {
     const { queue } = setup();
     await queue.push({ name: "x" });
