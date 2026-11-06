@@ -17,6 +17,7 @@ lines.once("line", async () => {
     const job = await driver.reserve(queue, 1_000, Number.MAX_SAFE_INTEGER);
     if (!job) break;
     console.log(JSON.stringify(job.id));
+    await new Promise((r) => setTimeout(r, 2)); // pause so the other child gets turns
   }
   process.stdin.destroy(); // release stdin so the child exits when the queue is drained
 });

@@ -280,7 +280,10 @@ describe("concurrency across processes", () => {
     await Promise.all(started.map((run) => run.ready));
     for (const child of children) child.stdin!.write("go\n");
 
-    const got = (await Promise.all(started.map((run) => run.ids))).flat();
+    const perChild = await Promise.all(started.map((run) => run.ids));
+    for (const ids of perChild) expect(ids.length).toBeGreaterThan(0);
+
+    const got = perChild.flat();
     expect(got).toHaveLength(pushed.size);
     expect(new Set(got).size).toBe(got.length);
     expect(new Set(got)).toEqual(pushed);
