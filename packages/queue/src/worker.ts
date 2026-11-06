@@ -27,6 +27,10 @@ export function markUnregisteredHandler(handler: JobHandler): JobHandler {
   return handler;
 }
 
+export function isUnregisteredHandler(handler: JobHandler): boolean {
+  return unregisteredHandlers.has(handler);
+}
+
 /**
  * Thrown for a job whose name has no registered handler. No handler can run it until one is registered,
  * so runJob fails it on the first attempt instead of retrying.
