@@ -8,9 +8,13 @@ import { type JobHandler, markUnregisteredHandler, UnregisteredJobError } from "
 /** Handlers keyed by job name, as passed to `Queue.register`. */
 export type JobHandlers = Readonly<Record<string, JobHandler>>;
 
-/** A job to push: a registered name, JSON-serializable data, and optional limits. */
-export interface JobPayload {
-  readonly name: string;
+/**
+ * A job to push: a name, JSON-serializable data, and optional limits. `Name` is the set of registered job
+ * names. Left at its default (`string`), any name is accepted; a typed queue narrows it, so an unknown name
+ * is a compile error.
+ */
+export interface JobPayload<Name extends string = string> {
+  readonly name: Name;
   readonly data?: unknown;
   readonly options?: JobOptions;
 }
@@ -53,7 +57,7 @@ interface StoredPayload {
   readonly options?: JobOptions;
 }
 
-export class Queue {
+export class Queue<Name extends string = string> {
   readonly #driver: QueueDriver;
   readonly #defaultQueue: string;
   readonly #retryAfter: number;
@@ -93,17 +97,17 @@ export class Queue {
   }
 
   /** Pushes a job onto the default queue, available now. */
-  push(job: JobPayload): Promise<void> {
+  push(job: JobPayload<Name>): Promise<void> {
     return this.pushOn(this.#defaultQueue, job);
   }
 
   /** Pushes a job onto a named queue, available now. */
-  async pushOn(queue: string, job: JobPayload): Promise<void> {
+  async pushOn(queue: string, job: JobPayload<Name>): Promise<void> {
     await this.#driver.insert(checkQueueName(queue), encode(job, this.#retryAfter), this.#now());
   }
 
   /** Pushes a job that becomes available after `delay` milliseconds. */
-  async later(delay: number, job: JobPayload, options: LaterOptions = {}): Promise<void> {
+  async later(delay: number, job: JobPayload<Name>, options: LaterOptions = {}): Promise<void> {
     const queue = checkQueueName(options.queue ?? this.#defaultQueue);
     const availableAt = this.#now() + checkDuration(delay, "delay");
     await this.#driver.insert(queue, encode(job, this.#retryAfter), availableAt);

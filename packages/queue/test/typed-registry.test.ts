@@ -27,22 +27,22 @@ describe("typed job registry", () => {
   it("rejects an unregistered name in push at compile time", () => {
     const queue = new Queue<Names>({ driver: new FakeDriver() });
     // Never invoked: this test only checks that the call does not compile.
-    const attempt = () => queue.push({ name: "CancelInvoice" });
     // @ts-expect-error CancelInvoice is not a registered job name
+    const attempt = () => queue.push({ name: "CancelInvoice" });
     void attempt;
   });
 
   it("rejects an unregistered name in pushOn at compile time", () => {
     const queue = new Queue<Names>({ driver: new FakeDriver() });
-    const attempt = () => queue.pushOn("mail", { name: "CancelInvoice" });
     // @ts-expect-error CancelInvoice is not a registered job name
+    const attempt = () => queue.pushOn("mail", { name: "CancelInvoice" });
     void attempt;
   });
 
   it("rejects an unregistered name in later at compile time", () => {
     const queue = new Queue<Names>({ driver: new FakeDriver() });
-    const attempt = () => queue.later(1_000, { name: "CancelInvoice" });
     // @ts-expect-error CancelInvoice is not a registered job name
+    const attempt = () => queue.later(1_000, { name: "CancelInvoice" });
     void attempt;
   });
 
