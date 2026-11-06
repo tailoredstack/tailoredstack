@@ -1,4 +1,5 @@
 export type { QueueCounts, QueueDriver, RawFailedJob, RawJob } from "./driver.ts";
+export { SqliteQueueDriver, type SqliteQueueDriverOptions } from "./drivers/sqlite.ts";
 export type { JobOptions } from "./options.ts";
 export type { FailedJob, JobHandlers, JobPayload, LaterOptions, QueueOptions } from "./queue.ts";
 export { Queue } from "./queue.ts";
