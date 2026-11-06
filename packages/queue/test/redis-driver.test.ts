@@ -20,20 +20,11 @@ afterAll(async () => {
 });
 
 /** A driver on its own key namespace, so tests never see each other's jobs. */
-function freshDriver(retryAfter?: number): { driver: RedisQueueDriver; client: Redis } {
+function freshDriver(): { driver: RedisQueueDriver; client: Redis } {
   const client = new Redis(url, { maxRetriesPerRequest: 1 });
   clients.push(client);
-  return { driver: new RedisQueueDriver({ client, prefix: `queue:${randomUUID()}:`, retryAfter }), client };
+  return { driver: new RedisQueueDriver({ client, prefix: `queue:${randomUUID()}:` }), client };
 }
-
-describe("constructor", () => {
-  it("rejects a retryAfter that is not a positive finite number", () => {
-    const { client } = freshDriver();
-    for (const retryAfter of [0, -1, Number.NaN, Number.POSITIVE_INFINITY]) {
-      expect(() => new RedisQueueDriver({ client, retryAfter })).toThrow(RangeError);
-    }
-  });
-});
 
 describe("insert and reserve", () => {
   it("returns an inserted job on reserve with attempts 1", async () => {

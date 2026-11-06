@@ -12,15 +12,9 @@ export interface RedisQueueDriverOptions {
   client: RedisClient;
   /** Namespace for every key, so several queues can share one Redis. Defaults to "queue:". */
   prefix?: string;
-  /**
-   * Milliseconds a reservation stays hidden, per connection. Defaults to 90_000 (Laravel's Redis default).
-   * Must be a positive finite number.
-   */
-  retryAfter?: number;
 }
 
 const DEFAULT_PREFIX = "queue:";
-const DEFAULT_RETRY_AFTER_MS = 90_000;
 
 // Job ids are INCR values padded to 20 digits. Sorted-set members with equal scores order lexically, so padding makes
 // ties (same availableAt) come back in insertion order.
@@ -190,15 +184,10 @@ return { pending, delayed, reserved }`;
 export class RedisQueueDriver implements QueueDriver {
   readonly #client: RedisClient;
   readonly #prefix: string;
-  readonly retryAfter: number;
 
-  constructor({ client, prefix = DEFAULT_PREFIX, retryAfter = DEFAULT_RETRY_AFTER_MS }: RedisQueueDriverOptions) {
-    if (!Number.isFinite(retryAfter) || retryAfter <= 0) {
-      throw new RangeError(`retryAfter must be a positive finite number of ms, got ${retryAfter}`);
-    }
+  constructor({ client, prefix = DEFAULT_PREFIX }: RedisQueueDriverOptions) {
     this.#client = client;
     this.#prefix = prefix;
-    this.retryAfter = retryAfter;
   }
 
   #ready(queue: string): string {
