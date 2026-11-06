@@ -16,7 +16,7 @@ export interface JobOptions {
 }
 
 /** Validates options against the queue's retryAfter. Throws before anything is stored. */
-export function checkJobOptions(options: JobOptions, retryAfter: number): JobOptions {
+export function checkJobOptions(options: JobOptions, retryAfter: number, maxDelayMs?: number): JobOptions {
   const { tries, timeout, backoff, retryUntil, failOnTimeout } = options;
 
   if (tries !== undefined && (!Number.isInteger(tries) || tries < 1)) {
@@ -35,13 +35,17 @@ export function checkJobOptions(options: JobOptions, retryAfter: number): JobOpt
   if (backoff !== undefined) {
     if (typeof backoff === "number") {
       checkBackoffValue(backoff);
+      checkMaxBackoff(backoff, maxDelayMs);
     } else {
       // An array is one entry per retry, so its length can only be checked when tries is known.
       if (tries === undefined) throw new RangeError("a backoff array needs tries, so its length can be checked");
       if (backoff.length < tries - 1) {
         throw new RangeError(`backoff needs at least ${tries - 1} entries for tries ${tries}, got ${backoff.length}`);
       }
-      backoff.forEach(checkBackoffValue);
+      backoff.forEach((value) => {
+        checkBackoffValue(value);
+        checkMaxBackoff(value, maxDelayMs);
+      });
     }
   }
 
@@ -73,6 +77,12 @@ export function backoffFor(options: JobOptions, attempts: number): number {
   if (typeof backoff === "number") return backoff;
   // Entry i is the wait after attempt i + 1. The last attempt has no retry, so it has no entry.
   return backoff[attempts - 1] ?? 0;
+}
+
+function checkMaxBackoff(value: number, maxDelayMs: number | undefined): void {
+  if (maxDelayMs !== undefined && value > maxDelayMs) {
+    throw new RangeError(`backoff (${value}ms) exceeds driver maximum (${maxDelayMs}ms)`);
+  }
 }
 
 function checkBackoffValue(value: number): void {

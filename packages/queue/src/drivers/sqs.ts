@@ -60,6 +60,7 @@ interface Lease {
 
 /** Standard SQS driver. Reserved ids are ReceiptHandles scoped to a reservation. */
 export class SqsQueueDriver implements QueueDriver {
+  readonly maxDelayMs = MAX_DELAY * 1_000;
   readonly #client: SqsClient;
   readonly #queueUrl: (queue: string) => string;
   readonly #failedQueueUrl: string;
@@ -132,13 +133,14 @@ export class SqsQueueDriver implements QueueDriver {
     const lease = this.#held(queue, id, attempts, now);
     if (!lease) return false;
     const delayMs = availableAt - now;
+    if (delayMs > MAX_DELAY * 1_000) throw new RangeError("SQS release delay cannot exceed 900 seconds");
     if (delayMs < 0) throw new RangeError("availableAt must not precede now");
     // SQS has no transaction spanning SendMessage and DeleteMessage. Send first to avoid losing
     // work if sending fails; if the subsequent delete fails, both copies may be delivered (at least once).
     await this.#client.sendMessage({
       QueueUrl: this.#queueUrl(queue),
       MessageBody: JSON.stringify({ kind: "job", queue, payload: lease.payload, scheduledAt: availableAt }),
-      ...(delayMs > 0 ? { DelaySeconds: Math.min(MAX_DELAY, Math.ceil(delayMs / 1_000)) } : {}),
+      ...(delayMs > 0 ? { DelaySeconds: Math.ceil(delayMs / 1_000) } : {}),
     });
     await this.#client.deleteMessage({ QueueUrl: this.#queueUrl(queue), ReceiptHandle: id });
     this.#leases.delete(id);

@@ -35,6 +35,9 @@ export interface QueueCounts {
 }
 
 export interface QueueDriver {
+  /** Optional maximum supported per-attempt backoff in milliseconds. */
+  readonly maxDelayMs?: number;
+
   /** Stores a job, available from `availableAt`. Returns the driver-assigned id. */
   insert(queue: string, payload: string, availableAt: number, now?: number): Promise<string>;
 

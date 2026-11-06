@@ -116,7 +116,7 @@ export class Queue<Name extends string = string> {
   /** Pushes a job onto a named queue, available now. */
   async pushOn(queue: string, job: JobPayload<Name>): Promise<void> {
     const now = this.#now();
-    await this.#driver.insert(checkQueueName(queue), encode(job, this.#retryAfter), now, now);
+    await this.#driver.insert(checkQueueName(queue), encode(job, this.#retryAfter, this.#driver.maxDelayMs), now, now);
   }
 
   /** Pushes a job that becomes available after `delay` milliseconds. */
@@ -124,7 +124,7 @@ export class Queue<Name extends string = string> {
     const queue = checkQueueName(options.queue ?? this.#defaultQueue);
     const now = this.#now();
     const availableAt = now + checkDuration(delay, "delay");
-    await this.#driver.insert(queue, encode(job, this.#retryAfter), availableAt, now);
+    await this.#driver.insert(queue, encode(job, this.#retryAfter, this.#driver.maxDelayMs), availableAt, now);
   }
 
   /**
@@ -228,7 +228,7 @@ export class Queue<Name extends string = string> {
   }
 }
 
-function encode(job: JobPayload, retryAfter: number): string {
+function encode(job: JobPayload, retryAfter: number, maxDelayMs?: number): string {
   if (typeof job.name !== "string" || job.name.length === 0) {
     throw new TypeError("job name must be a non-empty string");
   }
@@ -252,7 +252,7 @@ function encode(job: JobPayload, retryAfter: number): string {
   });
   // JSON.stringify(fn) is undefined and would otherwise be dropped silently. Reject it instead.
   if (data === undefined) throw new TypeError(`job "${job.name}" data is not JSON-serializable`);
-  const options = checkJobOptions(job.options ?? {}, retryAfter);
+  const options = checkJobOptions(job.options ?? {}, retryAfter, maxDelayMs);
   // The uuid is fixed at push, so every reservation of the job reports the same one.
   return `{"uuid":${JSON.stringify(randomUUID())},"name":${JSON.stringify(job.name)},"data":${data},"options":${JSON.stringify(options)}}`;
 }
