@@ -16,6 +16,18 @@ export type JobOutcome = "completed" | "errored" | "timed-out";
 export type JobHandler = (job: ReservedJob, signal: AbortSignal) => unknown;
 
 /**
+ * Handlers that `Queue.handlerFor` returns for an unregistered job name. runJob reads the mark, so only a
+ * job whose own name is unregistered is failed on its first attempt. A registered handler that throws
+ * UnregisteredJobError for some other name is an ordinary error and keeps its tries budget.
+ */
+const unregisteredHandlers = new WeakSet<JobHandler>();
+
+export function markUnregisteredHandler(handler: JobHandler): JobHandler {
+  unregisteredHandlers.add(handler);
+  return handler;
+}
+
+/**
  * Thrown for a job whose name has no registered handler. No handler can run it until one is registered,
  * so runJob fails it on the first attempt instead of retrying.
  */
@@ -39,11 +51,13 @@ export async function runJob(job: ReservedJob, handler: JobHandler): Promise<Job
   const limit = job.timeout();
 
   // Never rejects: a handler that throws, including synchronously, resolves to "errored". The one exception
-  // is UnregisteredJobError, which is surfaced so the job can be failed rather than retried.
+  // is the UnregisteredJobError from a handler marked as unregistered, which is surfaced so the job can be
+  // failed rather than retried. An UnregisteredJobError from any other handler is an ordinary error.
+  const unregistered = unregisteredHandlers.has(handler);
   const attempt = new Promise<"completed" | "errored" | UnregisteredJobError>((resolve) => {
     new Promise<unknown>((settle) => settle(handler(job, controller.signal))).then(
       () => resolve("completed"),
-      (error: unknown) => resolve(error instanceof UnregisteredJobError ? error : "errored"),
+      (error: unknown) => resolve(unregistered && error instanceof UnregisteredJobError ? error : "errored"),
     );
   });
 

@@ -3,7 +3,7 @@ import type { QueueCounts, QueueDriver } from "./driver.ts";
 import { checkJobOptions, exhaustedReason, type JobOptions } from "./options.ts";
 import { ReservedJob } from "./reserved-job.ts";
 import { checkDuration, checkQueueName } from "./validate.ts";
-import { type JobHandler, UnregisteredJobError } from "./worker.ts";
+import { type JobHandler, markUnregisteredHandler, UnregisteredJobError } from "./worker.ts";
 
 /** Handlers keyed by job name, as passed to `Queue.register`. */
 export type JobHandlers = Readonly<Record<string, JobHandler>>;
@@ -87,9 +87,9 @@ export class Queue {
   handlerFor(name: string): JobHandler {
     const handler = this.#handlers.get(name);
     if (handler) return handler;
-    return async () => {
+    return markUnregisteredHandler(async () => {
       throw new UnregisteredJobError(name);
-    };
+    });
   }
 
   /** Pushes a job onto the default queue, available now. */
