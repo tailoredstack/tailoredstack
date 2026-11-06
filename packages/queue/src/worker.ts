@@ -4,7 +4,8 @@ import type { ReservedJob } from "./reserved-job.ts";
  * How one attempt ended:
  * - completed: the handler finished; the job was deleted.
  * - errored: the handler threw or rejected; the job was released with its backoff.
- * - timed-out: the attempt ran past its timeout; the job was released, or failed when failOnTimeout is set.
+ * - timed-out: the attempt ran past its timeout; the job is released after its lease ends, or failed when
+ *   failOnTimeout is set.
  */
 export type JobOutcome = "completed" | "errored" | "timed-out";
 
@@ -49,10 +50,15 @@ export async function runJob(job: ReservedJob, handler: JobHandler): Promise<Job
     await job.delete();
     return "completed";
   }
-  if (result === "timed-out" && job.failOnTimeout()) {
-    await job.fail(new Error(`job ${job.id} timed out after ${limit} ms`));
+  if (result === "timed-out") {
+    if (job.failOnTimeout()) {
+      await job.fail(new Error(`job ${job.id} timed out after ${limit} ms`));
+    } else {
+      // The handler may still be running. Hold the job until the lease ends, so no one reserves it first.
+      await job.releaseAfterLease();
+    }
     return "timed-out";
   }
   await job.release();
-  return result === "timed-out" ? "timed-out" : "errored";
+  return "errored";
 }

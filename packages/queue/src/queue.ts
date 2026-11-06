@@ -92,6 +92,7 @@ export class Queue {
             data: stored.data,
             attempts: raw.attempts,
             options,
+            reservedUntil: now + this.#retryAfter,
           },
           this.#driver,
           this.#now,
