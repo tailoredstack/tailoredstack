@@ -22,7 +22,9 @@ describe("SQS backoff validation", () => {
     const { client, driver } = setup();
     const queue = new Queue({ driver, now: () => 0 });
 
-    await expect(queue.push({ name: "retry", options: { tries: 3, backoff: [100, MAX_DELAY_MS + 1] } })).rejects.toThrow(RangeError);
+    await expect(
+      queue.push({ name: "retry", options: { tries: 3, backoff: [100, MAX_DELAY_MS + 1] } }),
+    ).rejects.toThrow(RangeError);
     expect(client.calls.filter((call) => call.op === "SendMessage")).toHaveLength(0);
   });
 
