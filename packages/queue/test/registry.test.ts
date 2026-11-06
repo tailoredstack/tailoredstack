@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { Queue, type ReservedJob, runJob } from "../src/index.ts";
+import { Queue, type ReservedJob, runJob, UnregisteredJobError } from "../src/index.ts";
 import { FakeDriver } from "./fake-driver.fake.ts";
 
 function setup() {
@@ -37,26 +37,30 @@ describe("job registry", () => {
     expect(job.isDeleted()).toBe(true);
   });
 
-  it("fails the attempt with an error that names the job when no handler is registered", async () => {
+  it("the handler for an unregistered name rejects with UnregisteredJobError naming the job", async () => {
     const { queue } = setup();
     queue.register({ SendInvoice: async () => {} });
     await queue.push({ name: "CancelInvoice" });
     const job = await reserve(queue);
 
-    await expect(queue.handlerFor(job.name)(job, signal())).rejects.toThrow(/CancelInvoice/);
+    const attempt = queue.handlerFor(job.name)(job, signal());
+    await expect(attempt).rejects.toBeInstanceOf(UnregisteredJobError);
+    await expect(attempt).rejects.toThrow(/CancelInvoice/);
   });
 
-  it("releases an unregistered job for retry instead of completing or dropping it", async () => {
+  it("runJob throws UnregisteredJobError and records the job as failed, with no retry", async () => {
     const { queue } = setup();
     await queue.push({ name: "CancelInvoice", options: { tries: 3 } });
     const job = await reserve(queue);
 
-    const outcome = await runJob(job, queue.handlerFor(job.name));
+    await expect(runJob(job, queue.handlerFor(job.name))).rejects.toBeInstanceOf(UnregisteredJobError);
 
-    expect(outcome).toBe("errored");
-    expect(job.isDeleted()).toBe(false);
-    expect(job.isReleased()).toBe(true);
-    expect(await queue.size()).toBe(1);
+    expect(job.hasFailed()).toBe(true);
+    expect(job.isReleased()).toBe(false);
+    expect(await queue.size()).toBe(0);
+    expect(await queue.failed()).toEqual([
+      expect.objectContaining({ name: "CancelInvoice", error: 'no handler registered for job "CancelInvoice"' }),
+    ]);
   });
 
   it("rejects a second registration of the same name", () => {
