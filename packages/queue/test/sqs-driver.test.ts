@@ -102,6 +102,20 @@ describe("stale attempts", () => {
 });
 
 describe("failed jobs", () => {
+  it("failed jobs are visible to a separate driver sharing the SQS failed queue", async () => {
+    const client = new FakeSqsClient();
+    const options = { client, queueUrl: (queue: string) => `https://sqs.test/${queue}`, failedQueueUrl: FAILED_URL };
+    const first = new SqsQueueDriver(options);
+    const second = new SqsQueueDriver(options);
+    await first.insert("default", "{}", 0, 0);
+    const reserved = await first.reserve("default", 0, 1_000);
+    if (!reserved) throw new Error("expected reservation");
+    expect(await first.fail("default", reserved.id, 1, 100, "boom")).toBe(true);
+
+    expect(await second.failedJobs("default")).toEqual([
+      expect.objectContaining({ queue: "default", payload: "{}", error: "boom" }),
+    ]);
+  });
   it("records a failed job and retryFailed restores it with attempts reset", async () => {
     const { client, driver } = setup();
     const id = await driver.insert("default", '{"n":1}', 0, 0);

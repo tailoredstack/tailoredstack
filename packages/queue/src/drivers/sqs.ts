@@ -162,10 +162,12 @@ export class SqsQueueDriver implements QueueDriver {
   }
 
   async failedJobs(queue: string | null): Promise<RawFailedJob[]> {
+    await this.#scanFailed();
     return [...this.#failedCache.values()].filter((job) => queue === null || job.queue === queue);
   }
 
   async retryFailed(id: string, now: number): Promise<boolean> {
+    await this.#scanFailed();
     const failed = this.#failedCache.get(id);
     if (!failed) return false;
     await this.insert(failed.queue, failed.payload, now, now);
@@ -174,16 +176,19 @@ export class SqsQueueDriver implements QueueDriver {
   }
 
   async retryAllFailed(queue: string | null, now: number): Promise<number> {
+    await this.#scanFailed();
     const jobs = [...this.#failedCache.values()].filter((job) => queue === null || job.queue === queue);
     for (const job of jobs) await this.retryFailed(job.id, now);
     return jobs.length;
   }
 
   async forgetFailed(id: string): Promise<boolean> {
+    await this.#scanFailed();
     return this.#deleteFailed(id);
   }
 
   async flushFailed(queue: string | null): Promise<number> {
+    await this.#scanFailed();
     const ids = [...this.#failedCache.values()]
       .filter((job) => queue === null || job.queue === queue)
       .map((job) => job.id);
@@ -192,6 +197,7 @@ export class SqsQueueDriver implements QueueDriver {
   }
 
   async pruneFailed(cutoff: number): Promise<number> {
+    await this.#scanFailed();
     const ids = [...this.#failedCache.values()].filter((job) => job.failedAt < cutoff).map((job) => job.id);
     for (const id of ids) await this.#deleteFailed(id);
     return ids.length;
@@ -217,6 +223,18 @@ export class SqsQueueDriver implements QueueDriver {
   #held(queue: string, id: string, attempts: number, now: number): Lease | null {
     const lease = this.#leases.get(id);
     return lease && lease.queue === queue && lease.attempts === attempts && lease.reservedUntil > now ? lease : null;
+  }
+
+  async #scanFailed(): Promise<void> {
+    const response = await this.#client.receiveMessage({ QueueUrl: this.#failedQueueUrl, MaxNumberOfMessages: 10, VisibilityTimeout: 0 });
+    this.#failedCache.clear();
+    this.#failedReceipts.clear();
+    for (const message of response.Messages ?? []) {
+      const body = parseEnvelope(requiredString(message.Body, "SQS failed message body"));
+      if (body.kind !== "failed" || !body.id || body.attempts === undefined || body.failedAt === undefined || body.error === undefined) continue;
+      this.#failedCache.set(body.id, { id: body.id, queue: body.queue, payload: body.payload, attempts: body.attempts, error: body.error, failedAt: body.failedAt });
+      this.#failedReceipts.set(body.id, requiredString(message.ReceiptHandle, "SQS failed ReceiptHandle"));
+    }
   }
 
   async #deleteFailed(id: string): Promise<boolean> {
