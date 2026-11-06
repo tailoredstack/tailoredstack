@@ -4,7 +4,7 @@ interface Row {
   readonly id: string;
   readonly queue: string;
   readonly payload: string;
-  readonly availableAt: number;
+  availableAt: number;
   reservedUntil: number | null;
   attempts: number;
 }
@@ -30,6 +30,21 @@ export class FakeDriver implements QueueDriver {
     return { id: row.id, queue: row.queue, payload: row.payload, attempts: row.attempts };
   }
 
+  async remove(queue: string, id: string, attempts: number, now: number): Promise<boolean> {
+    const index = this.#rows.findIndex((r) => r.id === id && r.queue === queue);
+    if (index < 0 || !this.#holds(this.#rows[index] as Row, attempts, now)) return false;
+    this.#rows.splice(index, 1);
+    return true;
+  }
+
+  async release(queue: string, id: string, attempts: number, now: number, availableAt: number): Promise<boolean> {
+    const row = this.#rows.find((r) => r.id === id && r.queue === queue);
+    if (!row || !this.#holds(row, attempts, now)) return false;
+    row.reservedUntil = null;
+    row.availableAt = availableAt;
+    return true;
+  }
+
   async counts(queue: string, now: number): Promise<QueueCounts> {
     let pending = 0;
     let delayed = 0;
@@ -41,5 +56,10 @@ export class FakeDriver implements QueueDriver {
       else pending += 1;
     }
     return { pending, delayed, reserved };
+  }
+
+  /** The caller holds the job: same attempt as the stored reservation, and it has not expired. */
+  #holds(row: Row, attempts: number, now: number): boolean {
+    return row.attempts === attempts && row.reservedUntil !== null && row.reservedUntil > now;
   }
 }

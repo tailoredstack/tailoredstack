@@ -21,7 +21,8 @@ describe("push and pop", () => {
     await queue.push({ name: "SendInvoice", data: { id: 7 } });
 
     const job = await queue.pop();
-    expect(job).toMatchObject({ queue: "default", name: "SendInvoice", data: { id: 7 }, attempts: 1 });
+    expect(job).toMatchObject({ queue: "default", name: "SendInvoice", data: { id: 7 } });
+    expect(job?.attempts()).toBe(1);
   });
 
   it("pushOn routes the job to the named queue only", async () => {
@@ -71,7 +72,9 @@ describe("push and pop", () => {
     expect(await queue.pop()).toBeNull();
 
     advance(1);
-    expect(await queue.pop()).toMatchObject({ name: "Flaky", attempts: 2 });
+    const retried = await queue.pop();
+    expect(retried).toMatchObject({ name: "Flaky" });
+    expect(retried?.attempts()).toBe(2);
   });
 });
 
