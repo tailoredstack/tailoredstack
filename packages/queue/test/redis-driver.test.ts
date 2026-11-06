@@ -177,6 +177,123 @@ describe("counts", () => {
   });
 });
 
+describe("wrong queue", () => {
+  it("remove, release, and fail reject a held job when the queue name differs", async () => {
+    const { driver } = freshDriver();
+    const id = await driver.insert("q", "{}", 0);
+    await driver.reserve("q", 100, 1_000);
+
+    expect(await driver.remove("other", id, 1, 200)).toBe(false);
+    expect(await driver.release("other", id, 1, 200, 300)).toBe(false);
+    expect(await driver.fail("other", id, 1, 200, "boom")).toBe(false);
+    expect(await driver.failedJobs(null)).toEqual([]);
+    expect(await driver.counts("q", 200)).toEqual({ pending: 0, delayed: 0, reserved: 1 });
+    expect(await driver.remove("q", id, 1, 200)).toBe(true);
+  });
+});
+
+describe("ended lease", () => {
+  it("release and fail reject a lease that ended at the same attempt", async () => {
+    const { driver } = freshDriver();
+    const id = await driver.insert("q", "{}", 0);
+    await driver.reserve("q", 100, 1_000);
+
+    expect(await driver.release("q", id, 1, 1_000, 1_500)).toBe(false);
+    expect(await driver.fail("q", id, 1, 1_000, "late")).toBe(false);
+    expect(await driver.failedJobs(null)).toEqual([]);
+  });
+});
+
+describe("failed store ordering, pruning, and unknown ids", () => {
+  it("lists failed jobs by failedAt, prunes strictly before the cutoff, and forgets unknown ids as false", async () => {
+    const { driver } = freshDriver();
+    const a = await driver.insert("q", "a", 0);
+    const b = await driver.insert("q", "b", 0);
+    await driver.reserve("q", 100, 1_000); // a
+    await driver.reserve("q", 100, 1_000); // b
+    expect(await driver.fail("q", b, 1, 200, "b-boom")).toBe(true);
+    expect(await driver.fail("q", a, 1, 300, "a-boom")).toBe(true);
+
+    expect((await driver.failedJobs(null)).map((f) => [f.id, f.failedAt])).toEqual([
+      [b, 200],
+      [a, 300],
+    ]);
+    expect(await driver.pruneFailed(250)).toBe(1); // b at 200 goes, a at 300 stays
+    expect((await driver.failedJobs(null)).map((f) => f.id)).toEqual([a]);
+    expect(await driver.pruneFailed(250)).toBe(0); // a at 300 is not before the cutoff
+    expect(await driver.forgetFailed("999999")).toBe(false);
+  });
+});
+
+describe("all-queue variants", () => {
+  it("retryAllFailed(null) and flushFailed(null) act across every queue", async () => {
+    const { driver } = freshDriver();
+    const a = await driver.insert("a", "{}", 0);
+    const b = await driver.insert("b", "{}", 0);
+    await driver.reserve("a", 100, 1_000);
+    await driver.reserve("b", 100, 1_000);
+    await driver.fail("a", a, 1, 200, "boom");
+    await driver.fail("b", b, 1, 200, "boom");
+
+    expect(await driver.retryAllFailed(null, 500)).toBe(2);
+    expect(await driver.failedJobs(null)).toEqual([]);
+    expect(await driver.reserve("a", 500, 1_000)).toMatchObject({ id: a, attempts: 1 });
+    expect(await driver.reserve("b", 500, 1_000)).toMatchObject({ id: b, attempts: 1 });
+
+    await driver.fail("a", a, 1, 600, "again");
+    await driver.fail("b", b, 1, 600, "again");
+    expect(await driver.flushFailed(null)).toBe(2);
+    expect(await driver.failedJobs(null)).toEqual([]);
+  });
+});
+
+describe("odd names and payloads", () => {
+  it("keeps queues whose names contain colons apart", async () => {
+    const { driver } = freshDriver();
+    const colon = await driver.insert("a:b", "x", 0);
+
+    expect(await driver.reserve("a", 100, 1_000)).toBeNull();
+    expect(await driver.reserve("a:b", 100, 1_000)).toMatchObject({ id: colon, queue: "a:b" });
+  });
+
+  it("round-trips empty, delimiter, newline, and unicode payloads in insertion order", async () => {
+    const { driver } = freshDriver();
+    const payloads = ["", "a|b:c", "line1\nline2", "héllo 🙂", '{"x":"\\u0000"}'];
+    for (const payload of payloads) await driver.insert("q", payload, 0);
+
+    const got: string[] = [];
+    for (let i = 0; i < payloads.length; i++) got.push((await driver.reserve("q", 100, 1_000))?.payload ?? "MISSING");
+    expect(got).toEqual(payloads);
+  });
+
+  it("counts zero on a queue that was never used", async () => {
+    const { driver } = freshDriver();
+    expect(await driver.counts("never-used", 100)).toEqual({ pending: 0, delayed: 0, reserved: 0 });
+  });
+});
+
+describe("race on one held job", () => {
+  it("when remove and fail race for the same held job, exactly one wins", async () => {
+    const shared = `queue:${randomUUID()}:`;
+    const a = new Redis(url, { maxRetriesPerRequest: 1 });
+    const b = new Redis(url, { maxRetriesPerRequest: 1 });
+    clients.push(a, b);
+    const driverA = new RedisQueueDriver({ client: a, prefix: shared });
+    const driverB = new RedisQueueDriver({ client: b, prefix: shared });
+
+    const id = await driverA.insert("q", "{}", 0);
+    await driverA.reserve("q", 100, 10_000);
+    const [removed, failed] = await Promise.all([
+      driverA.remove("q", id, 1, 200),
+      driverB.fail("q", id, 1, 200, "boom"),
+    ]);
+
+    expect(Number(removed) + Number(failed)).toBe(1);
+    expect((await driverA.failedJobs(null)).length).toBe(failed ? 1 : 0);
+    expect(await driverA.counts("q", 200)).toEqual({ pending: 0, delayed: 0, reserved: 0 });
+  });
+});
+
 describe("two clients on one Redis", () => {
   it("never reserves the same job twice", async () => {
     const shared = `queue:${randomUUID()}:`;
