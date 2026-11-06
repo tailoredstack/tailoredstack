@@ -21,6 +21,8 @@ jobs:
       RELEASE_APP_CLIENT_ID: ${{ vars.RELEASE_APP_CLIENT_ID }}
     outputs:
       releases_created: ${{ steps.release.outputs.releases_created }}
+      cache_released: ${{ steps.release.outputs['packages/cache--release_created'] }}
+      queue_released: ${{ steps.release.outputs['packages/queue--release_created'] }}
     steps:
       # Release PRs opened with GITHUB_TOKEN do not trigger other workflows (CI, commitlint).
       # A GitHub App token does. It is used when the app is configured and installed.
@@ -45,9 +47,9 @@ jobs:
           config-file: release-please-config.json
           manifest-file: .release-please-manifest.json
 
-  publish:
+  publish-cache:
     needs: release-please
-    if: ${{ needs.release-please.outputs.releases_created == 'true' }}
+    if: ${{ needs.release-please.outputs.cache_released == 'true' }}
     runs-on: ubuntu-latest
     # Job-level permissions replace the top-level block, so restate contents. id-token lets npm
     # exchange a GitHub OIDC token for a trusted-publishing credential. No NPM_TOKEN is used.
@@ -74,4 +76,32 @@ jobs:
         run: pnpm --filter @tailoredstack/cache test:e2e
       - name: Publish to npm 🚀
         working-directory: packages/cache
+        run: npm publish --access public --provenance
+
+  publish-queue:
+    needs: release-please
+    if: ${{ needs.release-please.outputs.queue_released == 'true' }}
+    runs-on: ubuntu-latest
+    # Same OIDC setup as publish-cache: no NPM_TOKEN.
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - name: Checkout 🛬
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Setup pnpm 📦
+        uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
+      - name: Setup Node ⚙️
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version-file: .nvmrc
+          cache: pnpm
+      - name: Install 📥
+        run: pnpm install --frozen-lockfile
+      - name: Build 📦
+        run: pnpm build
+      - name: Test ✅
+        run: pnpm --filter @tailoredstack/queue test
+      - name: Publish to npm 🚀
+        working-directory: packages/queue
         run: npm publish --access public --provenance
