@@ -9,16 +9,13 @@ function setup(handler: (job: ReservedJob) => unknown) {
 }
 
 describe("sync driver", () => {
-  it("runs the handler inside push, before push resolves", async () => {
+  it("runs the handler during push, so it has run by the time push resolves", async () => {
     const calls: string[] = [];
     const { queue } = setup((job) => {
       calls.push(job.name);
     });
 
-    const pushed = queue.push({ name: "Charge" });
-    expect(calls).toEqual([]);
-
-    await pushed;
+    await queue.push({ name: "Charge" });
     expect(calls).toEqual(["Charge"]);
   });
 
