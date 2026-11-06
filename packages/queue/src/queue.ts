@@ -3,7 +3,7 @@ import type { QueueCounts, QueueDriver } from "./driver.ts";
 import { checkJobOptions, exhaustedReason, type JobOptions } from "./options.ts";
 import { ReservedJob } from "./reserved-job.ts";
 import { checkDuration, checkQueueName } from "./validate.ts";
-import type { JobHandler } from "./worker.ts";
+import { type JobHandler, UnregisteredJobError } from "./worker.ts";
 
 /** Handlers keyed by job name, as passed to `Queue.register`. */
 export type JobHandlers = Readonly<Record<string, JobHandler>>;
@@ -81,14 +81,14 @@ export class Queue {
   }
 
   /**
-   * The handler for a job name, for `runJob`. An unregistered name gets a handler that rejects, so the
-   * attempt is released for retry (or fails once its tries run out) instead of being dropped.
+   * The handler for a job name, for `runJob`. An unregistered name gets a handler that throws
+   * UnregisteredJobError, which runJob turns into a failed job on the first attempt.
    */
   handlerFor(name: string): JobHandler {
     const handler = this.#handlers.get(name);
     if (handler) return handler;
     return async () => {
-      throw new Error(`no handler registered for job "${name}"`);
+      throw new UnregisteredJobError(name);
     };
   }
 
