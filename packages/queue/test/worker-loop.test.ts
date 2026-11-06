@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { Queue, runWorkerLoop, UnregisteredJobError } from "../src/index.ts";
+import { BAD_MESSAGE, bad, good, IDIOT_REASON, idiot } from "./actors.ts";
 import { FakeDriver } from "./fake-driver.fake.ts";
-import { bad, BAD_MESSAGE, good, idiot, IDIOT_REASON } from "./actors.ts";
 
 const sleep = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms));
 
