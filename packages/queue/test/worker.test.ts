@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { type ReservedJob, Queue, runJob } from "../src/index.ts";
+import { Queue, type ReservedJob, runJob } from "../src/index.ts";
 import { FakeDriver } from "./fake-driver.fake.ts";
 
 function setup() {
