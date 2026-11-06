@@ -22,3 +22,17 @@ describe("a release failure does not replace the callback outcome", () => {
     ).rejects.toThrow("callback failed");
   });
 });
+
+describe("lock misuse and failure paths", () => {
+  it("a store add failure during acquire rejects and does not leave a lock behind", async () => {
+    const store = new MemoryStore();
+    const cache = new Cache(store);
+    const original = store.add.bind(store);
+    store.add = async () => {
+      throw new Error("store unreachable");
+    };
+    await expect(cache.withoutOverlapping(["l"], () => 1)).rejects.toThrow("store unreachable");
+    store.add = original;
+    expect(await cache.withoutOverlapping(["l"], () => 2, { waitFor: 0 })).toBe(2);
+  });
+});

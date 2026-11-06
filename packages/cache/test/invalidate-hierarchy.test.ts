@@ -150,3 +150,33 @@ describe.each(stores)("array-key invalidation cost on %s", (_name, make) => {
     expect(await cache.get(["org", 1])).toBe("o1");
   });
 });
+
+describe("invalidate: a store failure mid-scan is not atomic and retry finishes", () => {
+  class FailingForgetStore extends MemoryStore {
+    failOn = new Set<string>();
+    override async forget(key: string): Promise<boolean> {
+      if (this.failOn.has(key)) throw new Error("io error");
+      return super.forget(key);
+    }
+  }
+
+  it("a forget failure stops at that key: earlier keys removed, failed and later keys kept", async () => {
+    const store = new FailingForgetStore();
+    const cache = new Cache(store);
+    await cache.set(["u", "a"], 1);
+    await cache.set(["u", "b"], 2);
+    await cache.set(["u", "c"], 3);
+    store.failOn.add(JSON.stringify(["u", "b"]));
+    const removed: unknown[] = [];
+    cache.on("forget", (e) => removed.push(e.key));
+
+    await expect(cache.invalidate(["u"])).rejects.toThrow("io error");
+    expect(removed).toEqual([["u", "a"]]);
+    expect(await cache.get(["u", "b"])).toBe(2);
+    expect(await cache.get(["u", "c"])).toBe(3);
+
+    store.failOn.clear();
+    expect(await cache.invalidate(["u"])).toBe(2);
+    expect(await cache.get(["u", "c"])).toBeUndefined();
+  });
+});
