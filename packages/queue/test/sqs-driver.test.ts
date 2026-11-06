@@ -145,6 +145,22 @@ describe("failed jobs", () => {
     expect(await driver.reserve("reports", 600, 1_600)).toMatchObject({ attempts: 1 });
   });
 
+  it("retryFailed and forgetFailed delete using a real failed-message receipt handle", async () => {
+    const { driver } = setup();
+    await driver.insert("default", "{}", 0, 0);
+    const reserved = await driver.reserve("default", 0, 1_000);
+    if (!reserved) throw new Error("expected reservation");
+    await driver.fail("default", reserved.id, 1, 0, "failed");
+    const [failed] = await driver.failedJobs("default");
+    expect(await driver.retryFailed(failed.id, 10)).toBe(true);
+    await driver.insert("default", "{}", 0, 0);
+    const next = await driver.reserve("default", 10, 1_000);
+    if (!next) throw new Error("expected next reservation");
+    await driver.fail("default", next.id, 1, 10, "failed again");
+    const [secondFailure] = await driver.failedJobs("default");
+    expect(await driver.forgetFailed(secondFailure.id)).toBe(true);
+  });
+
   it("flushFailed and forgetFailed delete failed records", async () => {
     const { client, driver } = setup();
     await driver.insert("emails", "{}", 0, 0);

@@ -220,13 +220,20 @@ export class SqsQueueDriver implements QueueDriver {
   }
 
   async #deleteFailed(id: string): Promise<boolean> {
-    const receipt = this.#failedReceipts.get(id);
-    if (!receipt || !this.#failedCache.has(id)) return false;
+    if (!this.#failedCache.has(id)) return false;
+    const response = await this.#client.receiveMessage({ QueueUrl: this.#failedQueueUrl, MaxNumberOfMessages: 10, VisibilityTimeout: 0 });
+    const message = response.Messages?.find((item) => {
+      const envelope = parseEnvelope(requiredString(item.Body, "SQS failed message body"));
+      return envelope.kind === "failed" && envelope.id === id;
+    });
+    if (!message) return false;
+    const receipt = requiredString(message.ReceiptHandle, "SQS failed ReceiptHandle");
     await this.#client.deleteMessage({ QueueUrl: this.#failedQueueUrl, ReceiptHandle: receipt });
     this.#failedCache.delete(id);
     this.#failedReceipts.delete(id);
     return true;
   }
+
 }
 
 function parseEnvelope(body: string): Envelope {

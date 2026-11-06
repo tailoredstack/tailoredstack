@@ -74,7 +74,7 @@ export class FakeSqsClient implements SqsClient {
   async deleteMessage(input: DeleteInput): Promise<unknown> {
     this.calls.push({ op: "DeleteMessage", input: { ...input } });
     const queue = this.#queue(input.QueueUrl);
-    const index = queue.findIndex((m) => m.receipt === input.ReceiptHandle || m.id === input.ReceiptHandle);
+    const index = queue.findIndex((m) => m.receipt === input.ReceiptHandle);
     if (index < 0) throw new Error("ReceiptHandleIsInvalid");
     queue.splice(index, 1);
     return {};
