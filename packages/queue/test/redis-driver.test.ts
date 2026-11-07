@@ -4,6 +4,8 @@ import { Redis } from "ioredis";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { RedisQueueDriver } from "../src/drivers/redis.ts";
 import { Queue } from "../src/queue.ts";
+import { runWorkerLoop } from "../src/worker-loop.ts";
+import { BAD_MESSAGE, bad, good, IDIOT_REASON, idiot } from "./actors.ts";
 
 // One real Redis for this file, started with testcontainers (same setup as the cache's test/global-setup.ts).
 let container: StartedRedisContainer;
@@ -389,6 +391,174 @@ describe("core integration", () => {
     const retried = await queue.pop();
     expect(retried).toMatchObject({ name: "Flaky" });
     expect(retried?.attempts()).toBe(2);
+  });
+});
+
+const sleepMs = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms));
+
+/** Polls until the driver's failed store has at least one record, or fails after 2 s. */
+async function untilFailed(driver: RedisQueueDriver): Promise<void> {
+  const deadline = Date.now() + 2_000;
+  while ((await driver.failedJobs(null)).length === 0) {
+    if (Date.now() > deadline) throw new Error("no failed record in time");
+    await sleepMs(1);
+  }
+}
+
+/** Polls a condition with small real waits. Fails the test if it does not hold within 2 s. */
+async function until(condition: () => boolean): Promise<void> {
+  const deadline = Date.now() + 2_000;
+  while (!condition()) {
+    if (Date.now() > deadline) throw new Error("condition not met in time");
+    await sleepMs(1);
+  }
+}
+
+describe("worker loop with good, bad, and idiot actors on redis", () => {
+  it("runs a good job exactly once and leaves nothing reserved", async () => {
+    const { driver } = freshDriver();
+    const queue = new Queue({ driver });
+    const g = good();
+    const q = queue.register({ Good: g.handler });
+    await q.push({ name: "Good", data: { n: 1 } });
+    const controller = new AbortController();
+    const done = runWorkerLoop({ queue, signal: controller.signal, pollInterval: 5, onError: () => {} });
+
+    await until(() => g.calls.length === 1);
+    controller.abort();
+    await done;
+
+    expect(g.calls).toEqual([{ name: "Good", data: { n: 1 } }]);
+    expect(await driver.counts("default", Date.now())).toEqual({ pending: 0, delayed: 0, reserved: 0 });
+    expect(await driver.failedJobs(null)).toEqual([]);
+  });
+
+  it("a bad job with tries 1 is reported, recorded as failed, and the loop runs the next good job", async () => {
+    const { driver } = freshDriver();
+    const queue = new Queue({ driver });
+    const b = bad();
+    const g = good();
+    const q = queue.register({ Bad: b.handler, Good: g.handler });
+    await q.push({ name: "Bad", options: { tries: 1 } });
+    await q.push({ name: "Good" });
+    const errors: unknown[] = [];
+    const controller = new AbortController();
+    const done = runWorkerLoop({
+      queue,
+      signal: controller.signal,
+      pollInterval: 5,
+      onError: (error) => errors.push(error),
+    });
+
+    await until(() => g.calls.length === 1);
+    // The bad job's exhausted reservation may land after the good job ran, so wait for the record, not the order.
+    await untilFailed(driver);
+    controller.abort();
+    await done;
+
+    expect(b.calls).toHaveLength(1);
+    expect(errors.map((e) => (e as Error).message)).toEqual([BAD_MESSAGE]);
+    // An errored attempt is released, not failed. The second reservation exceeds tries 1, so it is failed as
+    // exhausted. The handler's message reached onError above, not the stored failure reason.
+    const failed = await driver.failedJobs(null);
+    expect(failed).toHaveLength(1);
+    expect(failed[0]).toMatchObject({ queue: "default", attempts: 2, error: "exhausted: tries" });
+  });
+
+  it("a job with tries 3 runs three times, and the 4th reservation is recorded as failed with attempts 4", async () => {
+    // Fixed clock, so only the lease and the tries limit decide the outcome. Each attempt ends its lease by moving
+    // `now` past reservedUntil, which is what a crashed worker looks like to the driver.
+    const { driver } = freshDriver();
+    let now = 1_000;
+    const queue = new Queue({ driver, now: () => now, retryAfter: 1_000 });
+    const b = bad();
+    const q = queue.register({ Bad: b.handler });
+    await q.push({ name: "Bad", options: { tries: 3 } });
+
+    for (let attempt = 1; attempt <= 3; attempt++) {
+      const job = await queue.pop();
+      expect(job?.attempts()).toBe(attempt);
+      now += 1_000; // lease ends without a settle: the job is ready again
+    }
+    // exhaustedReason is "tries" only when attempts > tries, so the 4th reservation is failed, not run.
+    expect(await queue.pop()).toBeNull();
+    const failed = await driver.failedJobs(null);
+    expect(failed).toHaveLength(1);
+    expect(failed[0]).toMatchObject({ attempts: 4, error: "exhausted: tries" });
+  });
+
+  it("an idiot that throws a plain string is reported as-is and the loop keeps going", async () => {
+    const { driver } = freshDriver();
+    const queue = new Queue({ driver });
+    const i = idiot();
+    const g = good();
+    const q = queue.register({ Idiot: i.handler, Good: g.handler });
+    await q.push({ name: "Idiot", options: { tries: 1 } });
+    await q.push({ name: "Good" });
+    const errors: unknown[] = [];
+    const controller = new AbortController();
+    const done = runWorkerLoop({
+      queue,
+      signal: controller.signal,
+      pollInterval: 5,
+      onError: (error) => errors.push(error),
+    });
+
+    await until(() => g.calls.length === 1);
+    await untilFailed(driver);
+    controller.abort();
+    await done;
+
+    expect(i.calls).toHaveLength(1);
+    expect(errors).toEqual([IDIOT_REASON]);
+    expect(await driver.failedJobs(null)).toEqual([
+      expect.objectContaining({ attempts: 2, error: "exhausted: tries" }),
+    ]);
+  });
+
+  it("an idiot ignoring stop finishes its attempt, then the loop reserves nothing more", async () => {
+    const { driver } = freshDriver();
+    const queue = new Queue({ driver });
+    let open: () => void = () => {};
+    const gate = new Promise<void>((resolve) => {
+      open = resolve;
+    });
+    const i = idiot(gate);
+    const g = good();
+    const q = queue.register({ Idiot: i.handler, Good: g.handler });
+    await q.push({ name: "Idiot", options: { tries: 1 } });
+    await q.push({ name: "Good" });
+    const controller = new AbortController();
+    let returned = false;
+    const done = runWorkerLoop({ queue, signal: controller.signal, pollInterval: 5, onError: () => {} }).then(() => {
+      returned = true;
+    });
+
+    await until(() => i.calls.length === 1);
+    controller.abort();
+    await sleepMs(20);
+    expect(returned).toBe(false);
+
+    open();
+    await done;
+    expect(g.calls).toHaveLength(0);
+    // The idiot's errored attempt was released, so it is ready again. The good job was never reserved: 2 pending.
+    expect(await driver.counts("default", Date.now())).toEqual({ pending: 2, delayed: 0, reserved: 0 });
+  });
+
+  it("a worker stopped while idle returns without reserving a job pushed later", async () => {
+    const { driver } = freshDriver();
+    const queue = new Queue({ driver });
+    const g = good();
+    const q = queue.register({ Good: g.handler });
+    const controller = new AbortController();
+    const done = runWorkerLoop({ queue, signal: controller.signal, pollInterval: 1_000, onError: () => {} });
+
+    controller.abort();
+    await done;
+    await q.push({ name: "Good" });
+    expect(g.calls).toHaveLength(0);
+    expect(await driver.counts("default", Date.now())).toMatchObject({ pending: 1 });
   });
 });
 
