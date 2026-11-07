@@ -147,6 +147,26 @@ export class SqsQueueDriver implements QueueDriver {
     return true;
   }
 
+  async releaseAfterLease(
+    queue: string,
+    id: string,
+    attempts: number,
+    now: number,
+    availableAt: number,
+  ): Promise<boolean> {
+    const lease = this.#held(queue, id, attempts, now);
+    if (!lease) return false;
+    const delayMs = availableAt - now;
+    if (delayMs < 0) throw new RangeError("availableAt must not precede now");
+    if (delayMs > MAX_DELAY * 1_000) {
+      // The existing SQS visibility timeout already spans this lease remainder. Keep the original
+      // message hidden; unlike retry backoff, lease time is not subject to the 900-second delay cap.
+      this.#leases.delete(id);
+      return true;
+    }
+    return this.release(queue, id, attempts, now, availableAt);
+  }
+
   async fail(queue: string, id: string, attempts: number, now: number, error: string): Promise<boolean> {
     const lease = this.#held(queue, id, attempts, now);
     if (!lease) return false;

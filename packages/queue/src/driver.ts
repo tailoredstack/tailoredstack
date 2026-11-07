@@ -61,6 +61,9 @@ export interface QueueDriver {
    */
   release(queue: string, id: string, attempts: number, now: number, availableAt: number): Promise<boolean>;
 
+  /** Optional lease-aware release for timeouts; drivers may rely on the existing reservation lease. */
+  releaseAfterLease?(queue: string, id: string, attempts: number, now: number, availableAt: number): Promise<boolean>;
+
   /**
    * Removes a held job and records it in the failed store with `error`, under the same reservation
    * check. Returns false when the reservation was lost, so a stale worker cannot record a failure.

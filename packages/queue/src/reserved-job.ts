@@ -127,7 +127,17 @@ export class ReservedJob {
    */
   async releaseAfterLease(): Promise<void> {
     const wait = Math.max(backoffFor(this.#options, this.#attempts), this.leaseRemaining(), 0);
-    await this.release(wait);
+    const releaseAfterLease = this.#driver.releaseAfterLease;
+    if (!releaseAfterLease) {
+      await this.release(wait);
+      return;
+    }
+
+    this.#assertOpen();
+    const now = this.#now();
+    const held = await releaseAfterLease.call(this.#driver, this.queue, this.id, this.#attempts, now, now + wait);
+    if (!held) throw new ReservationLostError(this.id);
+    this.#settled = "released";
   }
 
   /**
