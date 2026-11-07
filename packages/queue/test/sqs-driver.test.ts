@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { SqsQueueDriver } from "../src/drivers/sqs.ts";
 import { Queue } from "../src/queue.ts";
+import { runJob } from "../src/worker.ts";
 import { FakeSqsClient } from "./fake-sqs-client.fake.ts";
 
 const FAILED_URL = "https://sqs.test/failed";
@@ -81,6 +82,27 @@ describe("insert and reserve", () => {
       payload: "{}",
       attempts: 2,
     });
+  });
+});
+
+describe("lease-based release", () => {
+  it("settles timed-out jobs when the remaining lease exceeds SQS's 900-second delay limit", async () => {
+    const client = new FakeSqsClient();
+    const driver = new SqsQueueDriver({
+      client,
+      queueUrl: (queue) => `https://sqs.test/${queue}`,
+      failedQueueUrl: FAILED_URL,
+    });
+    const queue = new Queue({ driver, retryAfter: 901_000, now: () => client.clock });
+    await queue.push({ name: "slow", options: { timeout: 1 } });
+    const reserved = await queue.pop();
+    if (!reserved) throw new Error("expected reservation");
+
+    await expect(runJob(reserved, () => new Promise(() => {}))).resolves.toBe("timed-out");
+    client.clock = 900_000;
+    expect(await queue.pop()).toBeNull();
+    client.clock = 901_000;
+    expect(await queue.pop()).not.toBeNull();
   });
 });
 
