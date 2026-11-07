@@ -178,6 +178,29 @@ describe("stale attempts", () => {
 });
 
 describe("failed jobs", () => {
+  it("reports both a page-read error and a per-record visibility restore error", async () => {
+    const { client, driver } = setup();
+    for (let index = 0; index < 11; index += 1) {
+      await driver.insert("default", `job-${index}`, 0, 0);
+      const reserved = await driver.reserve("default", 0, 1_000);
+      if (!reserved) throw new Error(`expected reservation ${index}`);
+      expect(await driver.fail("default", reserved.id, 1, 0, "failed")).toBe(true);
+    }
+
+    client.failReceiveAfter = 1;
+    client.failNextChangeVisibility = true;
+    await expect(driver.failedJobs(null)).rejects.toMatchObject({
+      name: "AggregateError",
+      errors: expect.arrayContaining([
+        expect.objectContaining({ message: "injected receive failure" }),
+        expect.objectContaining({ message: "injected visibility restore failure" }),
+      ]),
+    });
+    expect(await driver.failedJobs(null)).toHaveLength(10);
+    client.clock = MAX_LEASE_MS;
+    expect(await driver.failedJobs(null)).toHaveLength(11);
+  });
+
   it("restores first-page visibility when a later failed-store receive fails", async () => {
     const { client, driver } = setup();
     for (let index = 0; index < 11; index += 1) {

@@ -29,6 +29,7 @@ export interface SqsCall {
 export class FakeSqsClient implements SqsClient {
   clock = 0;
   failNextDelete = false;
+  failNextChangeVisibility = false;
   failReceiveAfter: number | null = null;
   readonly calls: SqsCall[] = [];
   readonly #queues = new Map<string, Message[]>();
@@ -95,6 +96,10 @@ export class FakeSqsClient implements SqsClient {
 
   async changeMessageVisibility(input: ChangeVisibilityInput): Promise<unknown> {
     this.calls.push({ op: "ChangeMessageVisibility", input: { ...input } });
+    if (this.failNextChangeVisibility) {
+      this.failNextChangeVisibility = false;
+      throw new Error("injected visibility restore failure");
+    }
     const message = this.#queue(input.QueueUrl).find((m) => m.receipt === input.ReceiptHandle);
     if (!message) throw new Error("ReceiptHandleIsInvalid");
     message.visibleAt = this.clock + input.VisibilityTimeout * 1000;
