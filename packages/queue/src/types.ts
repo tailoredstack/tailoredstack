@@ -6,6 +6,7 @@ export interface QueueSize {
 
 export interface Reserved {
   readonly id: string;
+  readonly payload: string;
   readonly attempts: number;
   delete(now: number): Promise<boolean>;
   release(availableAt: number, now: number): Promise<boolean>;
@@ -26,6 +27,7 @@ export interface DriverCapabilities {
 
 export interface DriverLease {
   id: string;
+  payload: string;
   attempts: number;
   token: string;
 }
