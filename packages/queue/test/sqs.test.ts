@@ -27,7 +27,9 @@ describe("sqs lease ownership", () => {
     await expect(driver.delete("jobs", lease.token, T0 + 1)).resolves.toBe(true);
   });
 
-  it("never hands two instances the same message when they reserve at once", async () => {
+  // Best-effort I9: standard SQS can deliver one message to two concurrent receivers, so a race may lease a message
+  // on two instances. The race must still never lose a message.
+  it("loses no message when two instances race for them (cross-instance I9 is best-effort)", async () => {
     const prefix = freshPrefix();
     const first = createSqsDriver({ client: connect(), queueNamePrefix: prefix });
     const second = createSqsDriver({ client: connect(), queueNamePrefix: prefix });
@@ -44,7 +46,7 @@ describe("sqs lease ownership", () => {
     };
     const [a, b] = await Promise.all([claim(first), claim(second)]);
     const expected = Array.from({ length: 10 }, (_, i) => `m${i}`);
-    expect([...a, ...b].sort()).toEqual(expected);
+    expect(new Set([...a, ...b])).toEqual(new Set(expected));
   });
 
   it("lets a peer re-reserve a message whose lease ended on the caller's clock", async () => {
@@ -59,7 +61,8 @@ describe("sqs lease ownership", () => {
     expect(again?.attempts).toBe(2);
   });
 
-  it("breaks equal availableAt ties by push order across instances", async () => {
+  // R1 amendment: equal availableAt is ordered by push sequence within one instance. Across instances the order is unspecified.
+  it("keeps push order within each instance; orders equal availableAt across instances as unspecified", async () => {
     const prefix = freshPrefix();
     const first = createSqsDriver({ client: connect(), queueNamePrefix: prefix });
     const second = createSqsDriver({ client: connect(), queueNamePrefix: prefix });
@@ -67,14 +70,16 @@ describe("sqs lease ownership", () => {
     await first.push("jobs", "a2", { availableAt: T0, now: T0 });
     await first.push("jobs", "a3", { availableAt: T0, now: T0 });
     await second.push("jobs", "b1", { availableAt: T0, now: T0 });
+    await second.push("jobs", "b2", { availableAt: T0, now: T0 });
     const order: string[] = [];
-    for (let i = 0; i < 4; i++) {
+    for (let i = 0; i < 5; i++) {
       const lease = await first.reserve("jobs", T0, T0 + 60_000);
       if (lease === null) throw new Error("expected a message");
       order.push(lease.payload);
       await first.delete("jobs", lease.token, T0);
     }
-    expect(order).toEqual(["a1", "a2", "a3", "b1"]);
+    expect(order.filter((payload) => payload.startsWith("a"))).toEqual(["a1", "a2", "a3"]);
+    expect(order.filter((payload) => payload.startsWith("b"))).toEqual(["b1", "b2"]);
   });
 
   it("keeps only the newest copy when an older copy of the same message is still visible", async () => {
