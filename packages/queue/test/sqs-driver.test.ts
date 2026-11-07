@@ -19,6 +19,12 @@ function setup() {
 }
 
 describe("SQS backoff validation", () => {
+  it("rejects a retryAfter above the SQS visibility maximum during Queue construction", () => {
+    const { driver } = setup();
+
+    expect(() => new Queue({ driver, retryAfter: MAX_LEASE_MS + 1 })).toThrow(/visibility.*maximum/i);
+  });
+
   it("rejects any backoff entry above 900s at push before storing the job", async () => {
     const { client, driver } = setup();
     const queue = new Queue({ driver, now: () => 0 });
