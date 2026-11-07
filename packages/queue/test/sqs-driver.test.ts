@@ -178,6 +178,29 @@ describe("stale attempts", () => {
 });
 
 describe("failed jobs", () => {
+  it("continues restoring valid records after a malformed body is removed", async () => {
+    const { client, driver } = setup();
+    const failJob = async (payload: string) => {
+      await driver.insert("default", payload, 0, 0);
+      const reserved = await driver.reserve("default", 0, 1_000);
+      if (!reserved) throw new Error(`expected reservation for ${payload}`);
+      expect(await driver.fail("default", reserved.id, 1, 0, "failed")).toBe(true);
+    };
+
+    await failJob("A");
+    await client.sendMessage({ QueueUrl: FAILED_URL, MessageBody: "poison" });
+    await failJob("B");
+    await failJob("C");
+
+    await expect(driver.failedJobs(null)).rejects.toBeInstanceOf(AggregateError);
+    const page = await client.receiveMessage({ QueueUrl: FAILED_URL, MaxNumberOfMessages: 10, VisibilityTimeout: 0 });
+    const poison = page.Messages?.find((message) => message.Body === "poison");
+    if (!poison || typeof poison.ReceiptHandle !== "string") throw new Error("expected poison message");
+    await client.deleteMessage({ QueueUrl: FAILED_URL, ReceiptHandle: poison.ReceiptHandle });
+
+    expect(await driver.failedJobs(null)).toHaveLength(3);
+  });
+
   it("retries failed visibility restoration so the next scan sees every record", async () => {
     const { client, driver } = setup();
     for (let index = 0; index < 3; index += 1) {
