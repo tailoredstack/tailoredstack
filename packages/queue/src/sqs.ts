@@ -72,8 +72,7 @@ function byDueThenSequence(a: Copy, b: Copy): number {
 }
 
 function parseCopy(message: Message): Copy {
-  if (message.Body === undefined) throw new Error("SQS message has no body");
-  return { message, stored: JSON.parse(message.Body) as StoredMessage };
+  return { message, stored: JSON.parse(message.Body as string) as StoredMessage };
 }
 
 // Keeps the highest-version copy of each message. A lower copy is left behind when a rewrite sent its replacement and
