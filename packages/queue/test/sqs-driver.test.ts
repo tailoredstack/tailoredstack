@@ -178,6 +178,23 @@ describe("stale attempts", () => {
 });
 
 describe("failed jobs", () => {
+  it("retries failed visibility restoration so the next scan sees every record", async () => {
+    const { client, driver } = setup();
+    for (let index = 0; index < 3; index += 1) {
+      await driver.insert("default", `job-${index}`, 0, 0);
+      const reserved = await driver.reserve("default", 0, 1_000);
+      if (!reserved) throw new Error(`expected reservation ${index}`);
+      expect(await driver.fail("default", reserved.id, 1, 0, "failed")).toBe(true);
+    }
+
+    client.failNextChangeVisibility = true;
+    await expect(driver.failedJobs(null)).rejects.toMatchObject({
+      name: "AggregateError",
+      errors: expect.arrayContaining([expect.objectContaining({ message: "injected visibility restore failure" })]),
+    });
+    expect(await driver.failedJobs(null)).toHaveLength(3);
+  });
+
   it("reports both a page-read error and a per-record visibility restore error", async () => {
     const { client, driver } = setup();
     for (let index = 0; index < 11; index += 1) {
