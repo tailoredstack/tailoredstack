@@ -36,6 +36,7 @@
   "devDependencies": {
     "@biomejs/biome": "^2.6.5",
     "@testcontainers/redis": "^12.2.1",
+    "@testcontainers/valkey": "^12.2.1",
     "@types/node": "^26.6.6",
     "ioredis": "^6.0.0",
     "typescript": "^7.0.2",
