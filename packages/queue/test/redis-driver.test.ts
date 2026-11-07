@@ -3,6 +3,7 @@ import { RedisContainer, type StartedRedisContainer } from "@testcontainers/redi
 import { Redis } from "ioredis";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { RedisQueueDriver } from "../src/drivers/redis.ts";
+import { Queue } from "../src/queue.ts";
 
 // One real Redis for this file, started with testcontainers (same setup as the cache's test/global-setup.ts).
 let container: StartedRedisContainer;
@@ -312,6 +313,82 @@ describe("race on one held job", () => {
     expect(Number(removed) + Number(failed)).toBe(1);
     expect((await driverA.failedJobs(null)).length).toBe(failed ? 1 : 0);
     expect(await driverA.counts("q", 200)).toEqual({ pending: 0, delayed: 0, reserved: 0 });
+  });
+});
+
+describe("prefix isolation", () => {
+  it("two drivers with different prefixes on one Redis never see each other's jobs or failures", async () => {
+    const client = new Redis(url, { maxRetriesPerRequest: 1 });
+    clients.push(client);
+    const one = new RedisQueueDriver({ client, prefix: `queue:${randomUUID()}:` });
+    const two = new RedisQueueDriver({ client, prefix: `queue:${randomUUID()}:` });
+
+    const id = await one.insert("q", "mine", 0);
+    expect(await two.reserve("q", 100, 1_000)).toBeNull();
+    expect(await two.counts("q", 100)).toEqual({ pending: 0, delayed: 0, reserved: 0 });
+
+    await one.reserve("q", 100, 1_000);
+    await one.fail("q", id, 1, 200, "boom");
+    expect(await two.failedJobs(null)).toEqual([]);
+    expect(await one.failedJobs(null)).toHaveLength(1);
+  });
+});
+
+describe("requeue order", () => {
+  it("a requeued failed job goes behind older ready jobs", async () => {
+    const { driver } = freshDriver();
+    const failedId = await driver.insert("q", "failed", 0);
+    await driver.reserve("q", 100, 1_000);
+    await driver.fail("q", failedId, 1, 200, "boom");
+    const olderReady = await driver.insert("q", "older", 50);
+
+    expect(await driver.retryFailed(failedId, 300)).toBe(true);
+    expect((await driver.reserve("q", 300, 1_000))?.id).toBe(olderReady);
+    expect((await driver.reserve("q", 300, 1_000))?.id).toBe(failedId);
+  });
+
+  it("retryAllFailed requeues in failure order behind older ready jobs", async () => {
+    const { driver } = freshDriver();
+    const first = await driver.insert("q", "first", 0);
+    const second = await driver.insert("q", "second", 0);
+    await driver.reserve("q", 100, 1_000);
+    await driver.reserve("q", 100, 1_000);
+    await driver.fail("q", first, 1, 200, "boom");
+    await driver.fail("q", second, 1, 210, "boom");
+    const older = await driver.insert("q", "older", 50);
+
+    expect(await driver.retryAllFailed("q", 300)).toBe(2);
+    expect((await driver.reserve("q", 300, 1_000))?.id).toBe(older);
+  });
+});
+
+describe("empty store and no-match flush", () => {
+  it("retryAllFailed on an empty store returns 0, and flushFailed with no match returns 0", async () => {
+    const { driver } = freshDriver();
+    expect(await driver.retryAllFailed(null, 100)).toBe(0);
+    expect(await driver.flushFailed(null)).toBe(0);
+    await driver.insert("q", "{}", 0);
+    await driver.reserve("q", 100, 1_000);
+    await driver.fail("q", "1", 1, 200, "boom");
+    expect(await driver.flushFailed("other")).toBe(0);
+  });
+});
+
+describe("core integration", () => {
+  it("Queue over RedisQueueDriver: a reserved job is ready again after retryAfter, attempts incremented", async () => {
+    let now = 1_000;
+    const { driver } = freshDriver();
+    const queue = new Queue({ driver, now: () => now, retryAfter: 5_000 });
+    await queue.push({ name: "Flaky" });
+    await queue.pop();
+
+    now += 4_999;
+    expect(await queue.pop()).toBeNull();
+
+    now += 1;
+    const retried = await queue.pop();
+    expect(retried).toMatchObject({ name: "Flaky" });
+    expect(retried?.attempts()).toBe(2);
   });
 });
 
