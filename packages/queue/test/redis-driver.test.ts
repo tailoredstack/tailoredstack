@@ -4,6 +4,8 @@ import { Redis } from "ioredis";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { RedisQueueDriver } from "../src/drivers/redis.ts";
 import { Queue } from "../src/queue.ts";
+import { ReservationLostError, ReservedJob } from "../src/reserved-job.ts";
+import { runJob } from "../src/worker.ts";
 import { runWorkerLoop } from "../src/worker-loop.ts";
 import { BAD_MESSAGE, bad, good, IDIOT_REASON, idiot } from "./actors.ts";
 
@@ -559,6 +561,190 @@ describe("worker loop with good, bad, and idiot actors on redis", () => {
     await q.push({ name: "Good" });
     expect(g.calls).toHaveLength(0);
     expect(await driver.counts("default", Date.now())).toMatchObject({ pending: 1 });
+  });
+});
+
+/** Reserves one job with `driver` and returns it as a ReservedJob, so the methods run against Redis. */
+async function reserveOne(driver: RedisQueueDriver, options: { retryAfter?: number; now?: number } = {}) {
+  const now = options.now ?? 1_000;
+  const reservedUntil = now + (options.retryAfter ?? 5_000);
+  const raw = await driver.reserve("q", now, reservedUntil);
+  if (!raw) throw new Error("nothing reserved");
+  const payload = JSON.parse(raw.payload) as { uuid: string; name: string; data: unknown; options?: object };
+  return new ReservedJob(
+    {
+      id: raw.id,
+      uuid: payload.uuid,
+      queue: raw.queue,
+      name: payload.name,
+      data: payload.data,
+      attempts: raw.attempts,
+      options: payload.options ?? {},
+      reservedUntil,
+    },
+    driver,
+    () => now,
+  );
+}
+
+describe("ReservedJob methods on redis", () => {
+  it("delete removes the job and a second settle throws without touching redis", async () => {
+    const { driver } = freshDriver();
+    const queue = new Queue({ driver, now: () => 1_000 });
+    await queue.push({ name: "Once" });
+    const job = await queue.pop();
+    expect(job).not.toBeNull();
+    await job?.delete();
+
+    expect(job?.isDeleted()).toBe(true);
+    await expect(job?.delete()).rejects.toThrow("already deleted");
+    expect(await driver.counts("default", 1_000)).toEqual({ pending: 0, delayed: 0, reserved: 0 });
+  });
+
+  it("release makes the job ready after the given delay, and attempts are kept", async () => {
+    const { driver } = freshDriver();
+    await driver.insert("q", '{"uuid":"u","name":"N","data":null}', 0);
+    const job = await reserveOne(driver);
+    await job.release(500);
+
+    expect(job.isReleased()).toBe(true);
+    expect(await driver.reserve("q", 1_499, 9_000)).toBeNull();
+    expect(await driver.reserve("q", 1_500, 9_000)).toMatchObject({ id: job.id, attempts: 2 });
+  });
+
+  it("fail records the error text and a non-Error value stored as its string", async () => {
+    const { driver } = freshDriver();
+    await driver.insert("q", '{"uuid":"u","name":"N","data":null}', 0);
+    const job = await reserveOne(driver);
+    await job.fail(new Error("kaboom"));
+    expect(job.hasFailed()).toBe(true);
+    expect((await driver.failedJobs(null))[0]?.error).toBe("kaboom");
+  });
+
+  it("fail with no error stores the text 'failed', and a non-Error stores its string form", async () => {
+    const { driver } = freshDriver();
+    await driver.insert("q", '{"uuid":"u","name":"N","data":null}', 0);
+    await driver.insert("q", '{"uuid":"v","name":"N","data":null}', 0);
+    await (await reserveOne(driver)).fail();
+    await (await reserveOne(driver)).fail("plain string");
+    expect((await driver.failedJobs(null)).map((f) => f.error)).toEqual(["failed", "plain string"]);
+  });
+
+  it("delete, release, and fail after the lease was taken by another worker throw ReservationLostError", async () => {
+    const { driver } = freshDriver();
+    await driver.insert("q", '{"uuid":"u","name":"N","data":null}', 0);
+    const stale = await reserveOne(driver, { retryAfter: 1_000, now: 1_000 });
+    // The lease ended at 2_000; another worker takes the job at 2_000 (attempt 2).
+    expect(await driver.reserve("q", 2_000, 3_000)).toMatchObject({ attempts: 2 });
+
+    await expect(stale.delete()).rejects.toBeInstanceOf(ReservationLostError);
+    await expect(stale.release(0)).rejects.toBeInstanceOf(ReservationLostError);
+    await expect(stale.fail(new Error("x"))).rejects.toBeInstanceOf(ReservationLostError);
+    expect(stale.isDeleted() || stale.isReleased() || stale.hasFailed()).toBe(false);
+    expect(await driver.failedJobs(null)).toEqual([]);
+  });
+
+  it("releaseAfterLease waits out the remaining lease before the job is ready again", async () => {
+    const { driver } = freshDriver();
+    await driver.insert("q", '{"uuid":"u","name":"N","data":null}', 0);
+    const job = await reserveOne(driver, { retryAfter: 5_000, now: 1_000 });
+    await job.releaseAfterLease(); // leaseRemaining 5000 at now 1000
+
+    expect(await driver.reserve("q", 5_999, 9_000)).toBeNull();
+    expect(await driver.reserve("q", 6_000, 9_000)).toMatchObject({ attempts: 2 });
+  });
+});
+
+describe("timeouts through runJob on redis", () => {
+  it("a timed-out attempt with failOnTimeout is recorded as failed", async () => {
+    const { driver } = freshDriver();
+    const queue = new Queue({ driver, now: () => 1_000 });
+    const q = queue.register({ Slow: () => new Promise<void>(() => {}) });
+    await q.push({ name: "Slow", options: { timeout: 20, failOnTimeout: true, tries: 5 } });
+    const job = await queue.pop();
+    expect(job).not.toBeNull();
+    await runJob(job as ReservedJob, queue.handlerFor("Slow"));
+
+    const failed = await driver.failedJobs(null);
+    expect(failed).toHaveLength(1);
+    expect(failed[0]?.error).toContain("timed out after 20 ms");
+  });
+
+  it("a timed-out attempt without failOnTimeout is held until its lease ends, not reserved again first", async () => {
+    const { driver } = freshDriver();
+    let now = 1_000;
+    const queue = new Queue({ driver, now: () => now, retryAfter: 5_000 });
+    const q = queue.register({ Slow: () => new Promise<void>(() => {}) });
+    await q.push({ name: "Slow", options: { timeout: 20, tries: 5 } });
+    const job = await queue.pop();
+    await runJob(job as ReservedJob, queue.handlerFor("Slow"));
+
+    now = 1_000 + 4_999;
+    expect(await queue.pop()).toBeNull();
+    now = 1_000 + 5_000;
+    expect(await queue.pop()).toMatchObject({ name: "Slow" });
+  });
+});
+
+describe("stop mid-pop on redis", () => {
+  it("a job reserved after stop was requested is released unrun and is not lost", async () => {
+    const { driver } = freshDriver();
+    const queue = new Queue({ driver });
+    const g = good();
+    const q = queue.register({ Good: g.handler });
+    await q.push({ name: "Good" });
+    const controller = new AbortController();
+    controller.abort(); // stop requested before the pop's reserve returns
+    await runWorkerLoop({ queue, signal: controller.signal, pollInterval: 5, onError: () => {} });
+
+    expect(g.calls).toHaveLength(0);
+    expect(await driver.counts("default", Date.now())).toMatchObject({ pending: 1, reserved: 0 });
+  });
+});
+
+describe("expired lease race on redis", () => {
+  it("two clients reserving an expired-lease job: exactly one gets it, with attempts 2", async () => {
+    const shared = `queue:${randomUUID()}:`;
+    const a = new Redis(url, { maxRetriesPerRequest: 1 });
+    const b = new Redis(url, { maxRetriesPerRequest: 1 });
+    clients.push(a, b);
+    const driverA = new RedisQueueDriver({ client: a, prefix: shared });
+    const driverB = new RedisQueueDriver({ client: b, prefix: shared });
+
+    const id = await driverA.insert("q", "{}", 0);
+    expect(await driverA.reserve("q", 100, 1_000)).toMatchObject({ id, attempts: 1 });
+
+    const [x, y] = await Promise.all([driverA.reserve("q", 2_000, 3_000), driverB.reserve("q", 2_000, 3_000)]);
+    const got = [x, y].filter((job) => job !== null);
+    expect(got).toHaveLength(1);
+    expect(got[0]).toMatchObject({ id, attempts: 2 });
+  });
+});
+
+describe("redis failure during a script", () => {
+  it("a rejected eval surfaces as an error and leaves the job unreserved", async () => {
+    const failing = {
+      eval: async () => {
+        throw new Error("connection lost");
+      },
+    };
+    const driver = new RedisQueueDriver({ client: failing, prefix: "queue:x:" });
+    await expect(driver.insert("q", "{}", 0)).rejects.toThrow("connection lost");
+    await expect(driver.reserve("q", 0, 1)).rejects.toThrow("connection lost");
+  });
+
+  it("a reserve on a disconnected client rejects, and the job is still ready for another client", async () => {
+    const shared = `queue:${randomUUID()}:`;
+    const dying = new Redis(url, { maxRetriesPerRequest: 1, lazyConnect: true });
+    const healthy = new Redis(url, { maxRetriesPerRequest: 1 });
+    clients.push(healthy);
+    const driverHealthy = new RedisQueueDriver({ client: healthy, prefix: shared });
+    const id = await driverHealthy.insert("q", "{}", 0);
+    const driverDying = new RedisQueueDriver({ client: dying, prefix: shared });
+    dying.disconnect();
+
+    await expect(driverDying.reserve("q", 100, 1_000)).rejects.toThrow();
+    expect(await driverHealthy.reserve("q", 100, 1_000)).toMatchObject({ id, attempts: 1 });
   });
 });
 
