@@ -281,7 +281,11 @@ export class SqsQueueDriver implements QueueDriver {
         for (const message of messages) {
           const receipt = requiredString(message.ReceiptHandle, "SQS failed ReceiptHandle");
           receipts.push(receipt);
-          records.push({ body: parseEnvelope(requiredString(message.Body, "SQS failed message body")), receipt });
+          try {
+            records.push({ body: parseEnvelope(requiredString(message.Body, "SQS failed message body")), receipt });
+          } catch (error) {
+            errors.push(error);
+          }
         }
       }
 
