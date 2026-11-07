@@ -13,7 +13,7 @@ interface Entry {
 export const MEMORY_CAPABILITIES: DriverCapabilities = {
   shared: false,
   exactCounts: true,
-  maxPushDelayMs: 43_200_000,
+  maxPushDelayMs: Number.POSITIVE_INFINITY,
 };
 
 // Entries stay in push order, so the first entry with the smallest availableAt is also the earliest push.
