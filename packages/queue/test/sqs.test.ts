@@ -1,0 +1,191 @@
+import { randomUUID } from "node:crypto";
+import {
+  ChangeMessageVisibilityCommand,
+  CreateQueueCommand,
+  DeleteMessageCommand,
+  GetQueueAttributesCommand,
+  ReceiveMessageCommand,
+  SendMessageCommand,
+  SQSClient,
+} from "@aws-sdk/client-sqs";
+import { GenericContainer, type StartedTestContainer } from "testcontainers";
+import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
+import { createSqsDriver } from "../src/sqs.js";
+import { driverContract } from "../src/testing/driver-contract.js";
+
+// Each SQS call may wait up to 1 s for a long poll; the contract's empty reserves take that long.
+vi.setConfig({ testTimeout: 60_000 });
+
+const ELASTICMQ_PORT = 9324;
+let container: StartedTestContainer;
+let endpoint: string;
+const clients: SQSClient[] = [];
+
+function connect(): SQSClient {
+  const client = new SQSClient({
+    endpoint,
+    region: "elasticmq",
+    credentials: { accessKeyId: "x", secretAccessKey: "x" },
+  });
+  clients.push(client);
+  return client;
+}
+
+// Each test gets its own namespace, so queues never leak between tests.
+function freshPrefix(): string {
+  return `t${randomUUID().replaceAll("-", "").slice(0, 12)}`;
+}
+
+beforeAll(async () => {
+  container = await new GenericContainer("softwaremill/elasticmq-native:latest")
+    .withExposedPorts(ELASTICMQ_PORT)
+    .start();
+  endpoint = `http://${container.getHost()}:${container.getMappedPort(ELASTICMQ_PORT)}`;
+}, 120_000);
+
+afterAll(async () => {
+  for (const client of clients.splice(0)) {
+    client.destroy();
+  }
+  await container.stop();
+});
+
+// Two driver instances, each with its own SDK client against one SQS endpoint: the shared-backend contract (B7) needs a peer.
+driverContract({
+  name: "sqs",
+  capabilities: { shared: true, exactCounts: false, maxPushDelayMs: 900_000 },
+  fixture: async () => {
+    const prefix = freshPrefix();
+    return {
+      driver: createSqsDriver({ client: connect(), queueNamePrefix: prefix }),
+      peer: createSqsDriver({ client: connect(), queueNamePrefix: prefix }),
+    };
+  },
+});
+
+// A client whose next call of one SDK command class fails with the given error; every other call goes through.
+function injectable(): { client: SQSClient; arm: (command: new (...args: never[]) => object, failure: Error) => void } {
+  const client = connect();
+  const send = client.send.bind(client);
+  let armed: { command: new (...args: never[]) => object; failure: Error } | undefined;
+  client.send = ((command: object) => {
+    if (armed !== undefined && command instanceof armed.command) {
+      const { failure } = armed;
+      armed = undefined;
+      return Promise.reject(failure);
+    }
+    return send(command as never);
+  }) as typeof client.send;
+  return {
+    client,
+    arm: (command, failure) => {
+      armed = { command, failure };
+    },
+  };
+}
+
+describe("sqs driver backend faults", () => {
+  it("propagates a CreateQueue failure unchanged", async () => {
+    const failure = new Error("create refused");
+    const { client, arm } = injectable();
+    arm(CreateQueueCommand, failure);
+    const driver = createSqsDriver({ client, queueNamePrefix: freshPrefix() });
+    await expect(driver.push("jobs", "body", { availableAt: 0, now: 0 })).rejects.toBe(failure);
+  });
+
+  it("propagates a SendMessage failure on push unchanged", async () => {
+    const failure = new Error("send refused");
+    const { client, arm } = injectable();
+    const driver = createSqsDriver({ client, queueNamePrefix: freshPrefix() });
+    await driver.push("jobs", "warm-up", { availableAt: 0, now: 0 });
+    arm(SendMessageCommand, failure);
+    await expect(driver.push("jobs", "body", { availableAt: 0, now: 0 })).rejects.toBe(failure);
+  });
+
+  it("propagates a ReceiveMessage failure on reserve unchanged", async () => {
+    const failure = new Error("receive refused");
+    const prefix = freshPrefix();
+    const seeded = createSqsDriver({ client: connect(), queueNamePrefix: prefix });
+    await seeded.push("jobs", "body", { availableAt: 0, now: 0 });
+    const { client, arm } = injectable();
+    const driver = createSqsDriver({ client, queueNamePrefix: prefix });
+    arm(ReceiveMessageCommand, failure);
+    await expect(driver.reserve("jobs", 0, 1_000)).rejects.toBe(failure);
+  });
+
+  it("propagates a ChangeMessageVisibility failure on reserve unchanged", async () => {
+    const failure = new Error("visibility refused");
+    const prefix = freshPrefix();
+    const seeded = createSqsDriver({ client: connect(), queueNamePrefix: prefix });
+    await seeded.push("jobs", "body", { availableAt: 0, now: 0 });
+    const { client, arm } = injectable();
+    const driver = createSqsDriver({ client, queueNamePrefix: prefix });
+    arm(ChangeMessageVisibilityCommand, failure);
+    await expect(driver.reserve("jobs", 0, 1_000)).rejects.toBe(failure);
+  });
+
+  it("propagates a DeleteMessage failure on delete unchanged", async () => {
+    const failure = new Error("delete refused");
+    const prefix = freshPrefix();
+    const { client, arm } = injectable();
+    const driver = createSqsDriver({ client, queueNamePrefix: prefix });
+    await driver.push("jobs", "body", { availableAt: 0, now: 0 });
+    const lease = await driver.reserve("jobs", 0, 1_000);
+    if (lease === null) {
+      throw new Error("expected a lease");
+    }
+    arm(DeleteMessageCommand, failure);
+    await expect(driver.delete("jobs", lease.token, 0)).rejects.toBe(failure);
+  });
+
+  it("propagates a SendMessage failure on release unchanged", async () => {
+    const failure = new Error("release send refused");
+    const prefix = freshPrefix();
+    const { client, arm } = injectable();
+    const driver = createSqsDriver({ client, queueNamePrefix: prefix });
+    await driver.push("jobs", "body", { availableAt: 0, now: 0 });
+    const lease = await driver.reserve("jobs", 0, 1_000);
+    if (lease === null) {
+      throw new Error("expected a lease");
+    }
+    arm(SendMessageCommand, failure);
+    await expect(driver.release("jobs", lease.token, 0, 0)).rejects.toBe(failure);
+  });
+
+  it("propagates a DeleteMessage failure on release unchanged", async () => {
+    const failure = new Error("release delete refused");
+    const prefix = freshPrefix();
+    const { client, arm } = injectable();
+    const driver = createSqsDriver({ client, queueNamePrefix: prefix });
+    await driver.push("jobs", "body", { availableAt: 0, now: 0 });
+    const lease = await driver.reserve("jobs", 0, 1_000);
+    if (lease === null) {
+      throw new Error("expected a lease");
+    }
+    arm(DeleteMessageCommand, failure);
+    await expect(driver.release("jobs", lease.token, 0, 0)).rejects.toBe(failure);
+  });
+
+  it("propagates a GetQueueAttributes failure on size unchanged", async () => {
+    const failure = new Error("attributes refused");
+    const { client, arm } = injectable();
+    const driver = createSqsDriver({ client, queueNamePrefix: freshPrefix() });
+    arm(GetQueueAttributesCommand, failure);
+    await expect(driver.size("jobs", 0)).rejects.toBe(failure);
+  });
+
+  it("propagates a ReceiveMessage failure on size unchanged", async () => {
+    const failure = new Error("size receive refused");
+    const { client, arm } = injectable();
+    const driver = createSqsDriver({ client, queueNamePrefix: freshPrefix() });
+    arm(ReceiveMessageCommand, failure);
+    await expect(driver.size("jobs", 0)).rejects.toBe(failure);
+  });
+
+  it("rejects when the SDK client is destroyed", async () => {
+    const client = connect();
+    const driver = createSqsDriver({ client, queueNamePrefix: freshPrefix() });
+    client.destroy();
+    await expect(driver.size("jobs", 0)).rejects.toThrow();
+  });
+});
