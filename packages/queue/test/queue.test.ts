@@ -153,7 +153,7 @@ describe("reserve validation (S7, S8)", () => {
 });
 
 describe("Reserved (R7, R8)", () => {
-  it("exposes the driver id and attempts, and does not expose the token", async () => {
+  it("G1, S3: exposes the driver id, payload, and attempts, and does not expose the token", async () => {
     const { driver, queue } = setup();
     driver.reserve.mockResolvedValueOnce({ id: "m1", attempts: 2, token: "t-secret", payload: "body" });
     const reserved = await queue.reserve("jobs", NOW, NOW + 1_000);
@@ -164,7 +164,7 @@ describe("Reserved (R7, R8)", () => {
     expect(Object.keys(reserved ?? {})).not.toContain("token");
   });
 
-  it("delete passes the token and now to the driver and returns its result", async () => {
+  it("D1: delete passes the token and now to the driver and returns its result", async () => {
     const { driver, queue } = setup();
     driver.reserve.mockResolvedValueOnce({ id: "m1", attempts: 1, token: "t1", payload: "x" });
     const reserved = await queue.reserve("jobs", NOW, NOW + 1_000);
@@ -172,7 +172,7 @@ describe("Reserved (R7, R8)", () => {
     expect(driver.delete).toHaveBeenCalledWith("jobs", "t1", NOW);
   });
 
-  it("release clamps a past availableAt and passes it with the token", async () => {
+  it("L2: release clamps a past availableAt to now and passes it with the token", async () => {
     const { driver, queue } = setup();
     driver.reserve.mockResolvedValueOnce({ id: "m1", attempts: 1, token: "t1", payload: "x" });
     const reserved = await queue.reserve("jobs", NOW, NOW + 1_000);
@@ -211,7 +211,7 @@ describe("Reserved (R7, R8)", () => {
 });
 
 describe("size validation (Z6 input)", () => {
-  it("rejects an invalid name and an invalid now", async () => {
+  it("Z6: size rejects an invalid name and an invalid now", async () => {
     const { driver, queue } = setup();
     await expect(queue.size("", NOW)).rejects.toThrow(InvalidArgumentError);
     await expect(queue.size("jobs", Number.NaN)).rejects.toThrow(InvalidArgumentError);
