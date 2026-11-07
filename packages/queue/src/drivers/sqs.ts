@@ -267,7 +267,8 @@ export class SqsQueueDriver implements QueueDriver {
     this.#failedReceipts.clear();
 
     // Temporarily hide each batch so the next ReceiveMessage call advances to the next page.
-    // Always restore every acquired handle, including when a subsequent page read or parse fails.
+    // Collect scan errors and attempt every visibility restore independently so neither failure masks the other.
+    const errors: unknown[] = [];
     try {
       for (;;) {
         const response = await this.#client.receiveMessage({
@@ -303,17 +304,24 @@ export class SqsQueueDriver implements QueueDriver {
         });
         this.#failedReceipts.set(body.id, receipt);
       }
-    } finally {
-      await Promise.all(
-        receipts.map((receipt) =>
-          this.#client.changeMessageVisibility({
+    } catch (error) {
+      errors.push(error);
+    }
+
+    await Promise.all(
+      receipts.map(async (receipt) => {
+        try {
+          await this.#client.changeMessageVisibility({
             QueueUrl: this.#failedQueueUrl,
             ReceiptHandle: receipt,
             VisibilityTimeout: 0,
-          }),
-        ),
-      );
-    }
+          });
+        } catch (error) {
+          errors.push(error);
+        }
+      }),
+    );
+    if (errors.length > 0) throw new AggregateError(errors, "SQS failed-store scan or visibility restoration failed");
   }
 
   async #deleteFailed(id: string): Promise<boolean> {

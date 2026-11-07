@@ -211,7 +211,10 @@ describe("failed jobs", () => {
     }
 
     client.failReceiveAfter = 1;
-    await expect(driver.failedJobs(null)).rejects.toThrow("injected receive failure");
+    await expect(driver.failedJobs(null)).rejects.toMatchObject({
+      name: "AggregateError",
+      errors: expect.arrayContaining([expect.objectContaining({ message: "injected receive failure" })]),
+    });
     client.failReceiveAfter = null;
     expect(await driver.failedJobs(null)).toHaveLength(11);
   });
