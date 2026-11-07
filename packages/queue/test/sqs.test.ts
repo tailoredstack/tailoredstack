@@ -3,9 +3,7 @@ import {
   ChangeMessageVisibilityCommand,
   CreateQueueCommand,
   DeleteMessageCommand,
-  GetQueueAttributesCommand,
   ReceiveMessageCommand,
-  type ReceiveMessageCommandOutput,
   SendMessageCommand,
   SQSClient,
 } from "@aws-sdk/client-sqs";
@@ -17,41 +15,14 @@ import type { Driver } from "../src/types.js";
 
 const T0 = 1_000_000;
 
-// Wraps the client so a test can see the receipt handles the driver received, and act on them as SQS would in real time.
-function recording(): { client: SQSClient; received: { QueueUrl: string; ReceiptHandle: string }[] } {
-  const client = connect();
-  const send = client.send.bind(client);
-  const received: { QueueUrl: string; ReceiptHandle: string }[] = [];
-  client.send = (async (command: object) => {
-    const reply = await send(command as never);
-    if (command instanceof ReceiveMessageCommand) {
-      const url = command.input.QueueUrl ?? "";
-      for (const message of (reply as ReceiveMessageCommandOutput).Messages ?? []) {
-        received.push({ QueueUrl: url, ReceiptHandle: message.ReceiptHandle ?? "" });
-      }
-    }
-    return reply;
-  }) as typeof client.send;
-  return { client, received };
-}
-
 describe("sqs lease ownership", () => {
-  it("keeps a live lease hidden when SQS makes its message visible before the lease ends", async () => {
-    const { client, received } = recording();
+  it("keeps a live lease hidden from a peer that reserves after SQS makes its copy visible", async () => {
+    const client = connect();
     const driver = createSqsDriver({ client, queueNamePrefix: freshPrefix() });
     await driver.push("jobs", "body", { availableAt: T0, now: T0 });
     const lease = await driver.reserve("jobs", T0, T0 + 60_000);
     if (lease === null) throw new Error("expected a lease");
-    const [seen] = received;
-    if (seen === undefined) throw new Error("expected a received message");
-    // SQS restores visibility on its own clock, while the caller's lease still runs.
-    await client.send(
-      new ChangeMessageVisibilityCommand({
-        QueueUrl: seen.QueueUrl,
-        ReceiptHandle: seen.ReceiptHandle,
-        VisibilityTimeout: 0,
-      }),
-    );
+    // The lease lives in the message body, so a peer that sees the copy visible still finds it leased on the caller's clock.
     await expect(driver.reserve("jobs", T0 + 1, T0 + 60_000)).resolves.toBeNull();
     await expect(driver.delete("jobs", lease.token, T0 + 1)).resolves.toBe(true);
   });
@@ -212,10 +183,12 @@ describe("sqs driver backend faults", () => {
     const prefix = freshPrefix();
     const seeded = createSqsDriver({ client: connect(), queueNamePrefix: prefix });
     await seeded.push("jobs", "body", { availableAt: 0, now: 0 });
+    await seeded.reserve("jobs", 0, 1_000);
     const { client, arm } = injectable();
     const driver = createSqsDriver({ client, queueNamePrefix: prefix });
     arm(ChangeMessageVisibilityCommand, failure);
-    await expect(driver.reserve("jobs", 0, 1_000)).rejects.toBe(failure);
+    // At 500 the copy is still leased, so reserve restores it rather than choosing it; that restore is the call that fails.
+    await expect(driver.reserve("jobs", 500, 2_000)).rejects.toBe(failure);
   });
 
   it("propagates a DeleteMessage failure on delete unchanged", async () => {
@@ -260,11 +233,15 @@ describe("sqs driver backend faults", () => {
     await expect(driver.release("jobs", lease.token, 0, 0)).rejects.toBe(failure);
   });
 
-  it("propagates a GetQueueAttributes failure on size unchanged", async () => {
-    const failure = new Error("attributes refused");
+  it("propagates a ChangeMessageVisibility failure on size unchanged", async () => {
+    const failure = new Error("size visibility refused");
+    const prefix = freshPrefix();
+    const seeded = createSqsDriver({ client: connect(), queueNamePrefix: prefix });
+    await seeded.push("jobs", "body", { availableAt: 0, now: 0 });
     const { client, arm } = injectable();
-    const driver = createSqsDriver({ client, queueNamePrefix: freshPrefix() });
-    arm(GetQueueAttributesCommand, failure);
+    const driver = createSqsDriver({ client, queueNamePrefix: prefix });
+    arm(ChangeMessageVisibilityCommand, failure);
+    // size restores every copy it drains, so the restore call is the one that fails.
     await expect(driver.size("jobs", 0)).rejects.toBe(failure);
   });
 
