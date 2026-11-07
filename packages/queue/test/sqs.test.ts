@@ -1,4 +1,4 @@
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import {
   ChangeMessageVisibilityCommand,
   CreateQueueCommand,
@@ -76,6 +76,40 @@ describe("sqs lease ownership", () => {
     }
     expect(order).toEqual(["a1", "a2", "a3", "b1"]);
   });
+
+  it("keeps only the newest copy when an older copy of the same message is still visible", async () => {
+    const prefix = freshPrefix();
+    const client = connect();
+    const digest = createHash("sha256").update("jobs").digest("hex").slice(0, 32);
+    const { QueueUrl } = await client.send(new CreateQueueCommand({ QueueName: `${prefix}-${digest}` }));
+    const queueUrl = QueueUrl as string;
+    // A failed rewrite can leave the old copy visible beside its replacement; the driver must never choose the old one.
+    const body = (id: string, version: number, payload: string, pushSeq: number): string =>
+      JSON.stringify({
+        id,
+        payload: Buffer.from(payload).toString("base64"),
+        pushSeq,
+        version,
+        availableAt: 0,
+        attempts: 0,
+        leaseUntil: 0,
+        token: null,
+      });
+    for (const message of [
+      body("x", 0, "old-x", 1),
+      body("x", 1, "new-x", 1),
+      body("y", 1, "new-y", 2),
+      body("y", 0, "old-y", 2),
+    ]) {
+      await client.send(new SendMessageCommand({ QueueUrl: queueUrl, MessageBody: message }));
+    }
+    const driver = createSqsDriver({ client, queueNamePrefix: prefix });
+    await expect(driver.size("jobs", 0)).resolves.toEqual({ ready: 2, delayed: 0, reserved: 0 });
+    const first = await driver.reserve("jobs", 0, 1_000);
+    const second = await driver.reserve("jobs", 0, 1_000);
+    expect([first?.payload, second?.payload].sort()).toEqual(["new-x", "new-y"]);
+    await expect(driver.reserve("jobs", 0, 1_000)).resolves.toBeNull();
+  });
 });
 
 // Each SQS call may wait up to 1 s for a long poll; the contract's empty reserves take that long.
@@ -147,6 +181,11 @@ function injectable(): { client: SQSClient; arm: (command: new (...args: never[]
       armed = { command, failure };
     },
   };
+}
+
+// The error SQS returns when a receipt handle no longer names the current copy.
+function staleReceipt(): Error {
+  return Object.assign(new Error("receipt is stale"), { name: "ReceiptHandleIsInvalid" });
 }
 
 describe("sqs driver backend faults", () => {
@@ -251,6 +290,30 @@ describe("sqs driver backend faults", () => {
     const driver = createSqsDriver({ client, queueNamePrefix: freshPrefix() });
     arm(ReceiveMessageCommand, failure);
     await expect(driver.size("jobs", 0)).rejects.toBe(failure);
+  });
+
+  it("ignores a stale receipt when release finds its replaced copy already gone", async () => {
+    const prefix = freshPrefix();
+    const seeded = createSqsDriver({ client: connect(), queueNamePrefix: prefix });
+    await seeded.push("jobs", "body", { availableAt: 0, now: 0 });
+    const lease = await seeded.reserve("jobs", 0, 1_000);
+    if (lease === null) throw new Error("expected a lease");
+    const { client, arm } = injectable();
+    const driver = createSqsDriver({ client, queueNamePrefix: prefix });
+    arm(DeleteMessageCommand, staleReceipt());
+    await expect(driver.release("jobs", lease.token, 0, 0)).resolves.toBe(true);
+  });
+
+  it("ignores a stale receipt when reserve restores a copy that is already gone", async () => {
+    const prefix = freshPrefix();
+    const seeded = createSqsDriver({ client: connect(), queueNamePrefix: prefix });
+    await seeded.push("jobs", "body", { availableAt: 0, now: 0 });
+    await seeded.reserve("jobs", 0, 1_000);
+    const { client, arm } = injectable();
+    const driver = createSqsDriver({ client, queueNamePrefix: prefix });
+    arm(ChangeMessageVisibilityCommand, staleReceipt());
+    // At 500 the copy is still leased, so reserve restores it; the restore fails as stale and is ignored.
+    await expect(driver.reserve("jobs", 500, 2_000)).resolves.toBeNull();
   });
 
   it("reads a receive reply without a Messages field as an empty batch", async () => {
