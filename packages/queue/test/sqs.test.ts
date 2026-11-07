@@ -13,6 +13,7 @@ import { GenericContainer, type StartedTestContainer } from "testcontainers";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { createSqsDriver } from "../src/sqs.js";
 import { driverContract } from "../src/testing/driver-contract.js";
+import type { Driver } from "../src/types.js";
 
 const T0 = 1_000_000;
 
@@ -55,48 +56,54 @@ describe("sqs lease ownership", () => {
     await expect(driver.delete("jobs", lease.token, T0 + 1)).resolves.toBe(true);
   });
 
-  it("does not lease a message another instance holds when the first instance's lease ends", async () => {
+  it("never hands two instances the same message when they reserve at once", async () => {
     const prefix = freshPrefix();
-    const { client, received } = recording();
-    const first = createSqsDriver({ client, queueNamePrefix: prefix });
+    const first = createSqsDriver({ client: connect(), queueNamePrefix: prefix });
+    const second = createSqsDriver({ client: connect(), queueNamePrefix: prefix });
+    for (let i = 0; i < 10; i++) {
+      await first.push("jobs", `m${i}`, { availableAt: T0, now: T0 });
+    }
+    const claim = async (driver: Driver): Promise<string[]> => {
+      const got: string[] = [];
+      for (let i = 0; i < 10; i++) {
+        const lease = await driver.reserve("jobs", T0, T0 + 60_000);
+        if (lease !== null) got.push(lease.payload);
+      }
+      return got;
+    };
+    const [a, b] = await Promise.all([claim(first), claim(second)]);
+    const expected = Array.from({ length: 10 }, (_, i) => `m${i}`);
+    expect([...a, ...b].sort()).toEqual(expected);
+  });
+
+  it("lets a peer re-reserve a message whose lease ended on the caller's clock", async () => {
+    const prefix = freshPrefix();
+    const first = createSqsDriver({ client: connect(), queueNamePrefix: prefix });
     const second = createSqsDriver({ client: connect(), queueNamePrefix: prefix });
     await first.push("jobs", "body", { availableAt: T0, now: T0 });
-    const lease = await first.reserve("jobs", T0, T0 + 1_000);
-    if (lease === null) throw new Error("expected a lease");
-    const [seen] = received;
-    if (seen === undefined) throw new Error("expected a received message");
-    await client.send(
-      new ChangeMessageVisibilityCommand({
-        QueueUrl: seen.QueueUrl,
-        ReceiptHandle: seen.ReceiptHandle,
-        VisibilityTimeout: 0,
-      }),
-    );
-    const held = await second.reserve("jobs", T0 + 500, T0 + 60_000);
-    if (held === null) throw new Error("expected the second instance to lease the message");
-    // The first lease ends on the caller's clock; its old receipt must not free the message the second instance holds.
-    await expect(first.reserve("jobs", T0 + 1_000, T0 + 2_000)).resolves.toBeNull();
-    await expect(second.delete("jobs", held.token, T0 + 500)).resolves.toBe(true);
+    const lease = await first.reserve("jobs", T0, T0 + 60_000);
+    if (lease === null) throw new Error("expected the first instance to lease the message");
+    // The lease ends on the caller's clock at T0 + 60 s; SQS's own visibility for the message is still 60 s of real time.
+    const again = await second.reserve("jobs", T0 + 60_000, T0 + 120_000);
+    expect(again?.attempts).toBe(2);
   });
 
-  it("ignores a stale receipt when a lease ends on the caller's clock", async () => {
-    const { client, arm } = injectable();
-    const driver = createSqsDriver({ client, queueNamePrefix: freshPrefix() });
-    await driver.push("jobs", "body", { availableAt: T0, now: T0 });
-    await driver.reserve("jobs", T0, T0 + 60_000);
-    arm(ChangeMessageVisibilityCommand, Object.assign(new Error("receipt gone"), { name: "ReceiptHandleIsInvalid" }));
-    // SQS still hides the message for its full visibility, so the stale receipt is ignored and nothing is leased.
-    await expect(driver.reserve("jobs", T0 + 60_000, T0 + 120_000)).resolves.toBeNull();
-  });
-
-  it("propagates a visibility failure other than a stale receipt when a lease ends", async () => {
-    const failure = new Error("visibility refused");
-    const { client, arm } = injectable();
-    const driver = createSqsDriver({ client, queueNamePrefix: freshPrefix() });
-    await driver.push("jobs", "body", { availableAt: T0, now: T0 });
-    await driver.reserve("jobs", T0, T0 + 60_000);
-    arm(ChangeMessageVisibilityCommand, failure);
-    await expect(driver.reserve("jobs", T0 + 60_000, T0 + 120_000)).rejects.toBe(failure);
+  it("breaks equal availableAt ties by push order across instances", async () => {
+    const prefix = freshPrefix();
+    const first = createSqsDriver({ client: connect(), queueNamePrefix: prefix });
+    const second = createSqsDriver({ client: connect(), queueNamePrefix: prefix });
+    await first.push("jobs", "a1", { availableAt: T0, now: T0 });
+    await first.push("jobs", "a2", { availableAt: T0, now: T0 });
+    await first.push("jobs", "a3", { availableAt: T0, now: T0 });
+    await second.push("jobs", "b1", { availableAt: T0, now: T0 });
+    const order: string[] = [];
+    for (let i = 0; i < 4; i++) {
+      const lease = await first.reserve("jobs", T0, T0 + 60_000);
+      if (lease === null) throw new Error("expected a message");
+      order.push(lease.payload);
+      await first.delete("jobs", lease.token, T0);
+    }
+    expect(order).toEqual(["a1", "a2", "a3", "b1"]);
   });
 });
 
