@@ -310,14 +310,30 @@ export class SqsQueueDriver implements QueueDriver {
 
     await Promise.all(
       receipts.map(async (receipt) => {
-        try {
-          await this.#client.changeMessageVisibility({
-            QueueUrl: this.#failedQueueUrl,
-            ReceiptHandle: receipt,
-            VisibilityTimeout: 0,
-          });
-        } catch (error) {
-          errors.push(error);
+        let restored = false;
+        for (let attempt = 0; attempt < 2; attempt += 1) {
+          try {
+            await this.#client.changeMessageVisibility({
+              QueueUrl: this.#failedQueueUrl,
+              ReceiptHandle: receipt,
+              VisibilityTimeout: 0,
+            });
+            restored = true;
+            break;
+          } catch (error) {
+            errors.push(error);
+          }
+        }
+        if (!restored) {
+          try {
+            await this.#client.changeMessageVisibility({
+              QueueUrl: this.#failedQueueUrl,
+              ReceiptHandle: receipt,
+              VisibilityTimeout: 1,
+            });
+          } catch (error) {
+            errors.push(error);
+          }
         }
       }),
     );

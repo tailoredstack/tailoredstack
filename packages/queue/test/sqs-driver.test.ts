@@ -213,7 +213,7 @@ describe("failed jobs", () => {
         expect.objectContaining({ message: "injected visibility restore failure" }),
       ]),
     });
-    expect(await driver.failedJobs(null)).toHaveLength(10);
+    expect(await driver.failedJobs(null)).toHaveLength(11);
     client.clock = MAX_LEASE_MS;
     expect(await driver.failedJobs(null)).toHaveLength(11);
   });
