@@ -61,6 +61,7 @@ interface Lease {
 /** Standard SQS driver. Reserved ids are ReceiptHandles scoped to a reservation. */
 export class SqsQueueDriver implements QueueDriver {
   readonly maxDelayMs = MAX_DELAY * 1_000;
+  readonly maxVisibilityMs = MAX_VISIBILITY * 1_000;
   readonly #client: SqsClient;
   readonly #queueUrl: (queue: string) => string;
   readonly #failedQueueUrl: string;

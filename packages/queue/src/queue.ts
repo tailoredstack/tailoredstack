@@ -77,6 +77,10 @@ export class Queue<Name extends string = string> {
     this.#defaultQueue = checkQueueName(options.defaultQueue ?? DEFAULT_QUEUE);
     this.#retryAfter = checkDuration(options.retryAfter ?? DEFAULT_RETRY_AFTER_MS, "retryAfter");
     if (this.#retryAfter <= 0) throw new RangeError("retryAfter must be greater than 0");
+    const maxVisibilityMs = this.#driver.maxVisibilityMs;
+    if (maxVisibilityMs !== undefined && this.#retryAfter > maxVisibilityMs) {
+      throw new RangeError(`retryAfter exceeds driver visibility maximum of ${maxVisibilityMs}ms`);
+    }
     this.#now = options.now ?? Date.now;
   }
 
