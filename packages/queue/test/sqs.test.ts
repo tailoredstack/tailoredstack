@@ -5,6 +5,7 @@ import {
   DeleteMessageCommand,
   GetQueueAttributesCommand,
   ReceiveMessageCommand,
+  type ReceiveMessageCommandOutput,
   SendMessageCommand,
   SQSClient,
 } from "@aws-sdk/client-sqs";
@@ -24,7 +25,7 @@ function recording(): { client: SQSClient; received: { QueueUrl: string; Receipt
     const reply = await send(command as never);
     if (command instanceof ReceiveMessageCommand) {
       const url = command.input.QueueUrl ?? "";
-      for (const message of reply.Messages ?? []) {
+      for (const message of (reply as ReceiveMessageCommandOutput).Messages ?? []) {
         received.push({ QueueUrl: url, ReceiptHandle: message.ReceiptHandle ?? "" });
       }
     }
@@ -76,6 +77,26 @@ describe("sqs lease ownership", () => {
     // The first lease ends on the caller's clock; its old receipt must not free the message the second instance holds.
     await expect(first.reserve("jobs", T0 + 1_000, T0 + 2_000)).resolves.toBeNull();
     await expect(second.delete("jobs", held.token, T0 + 500)).resolves.toBe(true);
+  });
+
+  it("ignores a stale receipt when a lease ends on the caller's clock", async () => {
+    const { client, arm } = injectable();
+    const driver = createSqsDriver({ client, queueNamePrefix: freshPrefix() });
+    await driver.push("jobs", "body", { availableAt: T0, now: T0 });
+    await driver.reserve("jobs", T0, T0 + 60_000);
+    arm(ChangeMessageVisibilityCommand, Object.assign(new Error("receipt gone"), { name: "ReceiptHandleIsInvalid" }));
+    // SQS still hides the message for its full visibility, so the stale receipt is ignored and nothing is leased.
+    await expect(driver.reserve("jobs", T0 + 60_000, T0 + 120_000)).resolves.toBeNull();
+  });
+
+  it("propagates a visibility failure other than a stale receipt when a lease ends", async () => {
+    const failure = new Error("visibility refused");
+    const { client, arm } = injectable();
+    const driver = createSqsDriver({ client, queueNamePrefix: freshPrefix() });
+    await driver.push("jobs", "body", { availableAt: T0, now: T0 });
+    await driver.reserve("jobs", T0, T0 + 60_000);
+    arm(ChangeMessageVisibilityCommand, failure);
+    await expect(driver.reserve("jobs", T0 + 60_000, T0 + 120_000)).rejects.toBe(failure);
   });
 });
 
@@ -248,10 +269,14 @@ describe("sqs driver backend faults", () => {
     await expect(driver.size("jobs", 0)).rejects.toBe(failure);
   });
 
-  it("rejects when the SDK client is destroyed", async () => {
+  it("reads a receive reply without a Messages field as an empty batch", async () => {
+    // SQS omits Messages when nothing is visible; ElasticMQ returns an empty list, so this stubs the omitted form.
     const client = connect();
+    const send = client.send.bind(client);
+    client.send = (async (command: object) =>
+      command instanceof ReceiveMessageCommand ? {} : send(command as never)) as typeof client.send;
     const driver = createSqsDriver({ client, queueNamePrefix: freshPrefix() });
-    client.destroy();
-    await expect(driver.size("jobs", 0)).rejects.toThrow();
+    await expect(driver.reserve("jobs", 0, 1_000)).resolves.toBeNull();
+    await expect(driver.size("jobs", 0)).resolves.toEqual({ ready: 0, delayed: 0, reserved: 0 });
   });
 });
