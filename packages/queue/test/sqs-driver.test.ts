@@ -172,6 +172,21 @@ describe("stale attempts", () => {
 });
 
 describe("failed jobs", () => {
+  it("restores first-page visibility when a later failed-store receive fails", async () => {
+    const { client, driver } = setup();
+    for (let index = 0; index < 11; index += 1) {
+      await driver.insert("default", `job-${index}`, 0, 0);
+      const reserved = await driver.reserve("default", 0, 1_000);
+      if (!reserved) throw new Error(`expected reservation ${index}`);
+      expect(await driver.fail("default", reserved.id, 1, 0, "failed")).toBe(true);
+    }
+
+    client.failReceiveAfter = 1;
+    await expect(driver.failedJobs(null)).rejects.toThrow("injected receive failure");
+    client.failReceiveAfter = null;
+    expect(await driver.failedJobs(null)).toHaveLength(11);
+  });
+
   it("retryAllFailed processes all failed jobs across SQS receive pages", async () => {
     const { driver } = setup();
     for (let index = 0; index < 11; index += 1) {

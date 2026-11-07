@@ -29,6 +29,7 @@ export interface SqsCall {
 export class FakeSqsClient implements SqsClient {
   clock = 0;
   failNextDelete = false;
+  failReceiveAfter: number | null = null;
   readonly calls: SqsCall[] = [];
   readonly #queues = new Map<string, Message[]>();
   #seq = 0;
@@ -50,6 +51,13 @@ export class FakeSqsClient implements SqsClient {
 
   async receiveMessage(input: ReceiveInput): Promise<{ Messages?: Record<string, unknown>[] }> {
     this.calls.push({ op: "ReceiveMessage", input: { ...input } });
+    if (this.failReceiveAfter !== null) {
+      if (this.failReceiveAfter === 0) {
+        this.failReceiveAfter = null;
+        throw new Error("injected receive failure");
+      }
+      this.failReceiveAfter -= 1;
+    }
     const max = input.MaxNumberOfMessages ?? 1;
     const timeout = input.VisibilityTimeout ?? 30;
     const visible = this.#queue(input.QueueUrl)
