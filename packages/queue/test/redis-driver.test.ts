@@ -273,6 +273,28 @@ describe("odd names and payloads", () => {
 });
 
 describe("race on one held job", () => {
+  it("when release and remove race for the same held job, exactly one wins and no copy is left behind", async () => {
+    const shared = `queue:${randomUUID()}:`;
+    const a = new Redis(url, { maxRetriesPerRequest: 1 });
+    const b = new Redis(url, { maxRetriesPerRequest: 1 });
+    clients.push(a, b);
+    const driverA = new RedisQueueDriver({ client: a, prefix: shared });
+    const driverB = new RedisQueueDriver({ client: b, prefix: shared });
+
+    const id = await driverA.insert("q", "{}", 0);
+    await driverA.reserve("q", 100, 10_000);
+    const [released, removed] = await Promise.all([
+      driverA.release("q", id, 1, 200, 300),
+      driverB.remove("q", id, 1, 200),
+    ]);
+
+    expect(Number(released) + Number(removed)).toBe(1);
+    expect(await driverA.failedJobs(null)).toEqual([]);
+    const total = (await driverA.counts("q", 400)).pending;
+    expect(total).toBe(released ? 1 : 0);
+  });
+
+
   it("when remove and fail race for the same held job, exactly one wins", async () => {
     const shared = `queue:${randomUUID()}:`;
     const a = new Redis(url, { maxRetriesPerRequest: 1 });
