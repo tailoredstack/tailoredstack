@@ -155,17 +155,18 @@ describe("reserve validation (S7, S8)", () => {
 describe("Reserved (R7, R8)", () => {
   it("exposes the driver id and attempts, and does not expose the token", async () => {
     const { driver, queue } = setup();
-    driver.reserve.mockResolvedValueOnce({ id: "m1", attempts: 2, token: "t-secret" });
+    driver.reserve.mockResolvedValueOnce({ id: "m1", attempts: 2, token: "t-secret", payload: "body" });
     const reserved = await queue.reserve("jobs", NOW, NOW + 1_000);
     expect(reserved?.id).toBe("m1");
     expect(reserved?.attempts).toBe(2);
+    expect(reserved?.payload).toBe("body");
     expect(JSON.stringify(reserved)).not.toContain("t-secret");
     expect(Object.keys(reserved ?? {})).not.toContain("token");
   });
 
   it("delete passes the token and now to the driver and returns its result", async () => {
     const { driver, queue } = setup();
-    driver.reserve.mockResolvedValueOnce({ id: "m1", attempts: 1, token: "t1" });
+    driver.reserve.mockResolvedValueOnce({ id: "m1", attempts: 1, token: "t1", payload: "x" });
     const reserved = await queue.reserve("jobs", NOW, NOW + 1_000);
     await expect(reserved?.delete(NOW)).resolves.toBe(true);
     expect(driver.delete).toHaveBeenCalledWith("jobs", "t1", NOW);
@@ -173,7 +174,7 @@ describe("Reserved (R7, R8)", () => {
 
   it("release clamps a past availableAt and passes it with the token", async () => {
     const { driver, queue } = setup();
-    driver.reserve.mockResolvedValueOnce({ id: "m1", attempts: 1, token: "t1" });
+    driver.reserve.mockResolvedValueOnce({ id: "m1", attempts: 1, token: "t1", payload: "x" });
     const reserved = await queue.reserve("jobs", NOW, NOW + 1_000);
     await expect(reserved?.release(NOW - 5, NOW)).resolves.toBe(true);
     expect(driver.release).toHaveBeenCalledWith("jobs", "t1", NOW, NOW);
@@ -181,7 +182,7 @@ describe("Reserved (R7, R8)", () => {
 
   it("stale delete and release return the driver's false without throwing", async () => {
     const { driver, queue } = setup();
-    driver.reserve.mockResolvedValueOnce({ id: "m1", attempts: 1, token: "t1" });
+    driver.reserve.mockResolvedValueOnce({ id: "m1", attempts: 1, token: "t1", payload: "x" });
     driver.delete.mockResolvedValueOnce(false);
     driver.release.mockResolvedValueOnce(false);
     const reserved = await queue.reserve("jobs", NOW, NOW + 1_000);
@@ -191,7 +192,7 @@ describe("Reserved (R7, R8)", () => {
 
   it("L6: release with an invalid time is an InvalidArgumentError", async () => {
     const { driver, queue } = setup();
-    driver.reserve.mockResolvedValueOnce({ id: "m1", attempts: 1, token: "t1" });
+    driver.reserve.mockResolvedValueOnce({ id: "m1", attempts: 1, token: "t1", payload: "x" });
     const reserved = await queue.reserve("jobs", NOW, NOW + 1_000);
     await expect(reserved?.release(Number.NaN, NOW)).rejects.toThrow(InvalidArgumentError);
     await expect(reserved?.release(NOW, 1.5)).rejects.toThrow(InvalidArgumentError);
@@ -200,7 +201,7 @@ describe("Reserved (R7, R8)", () => {
 
   it("L7: a release delay over 12h is a LimitError; exactly 12h is accepted", async () => {
     const { driver, queue } = setup();
-    driver.reserve.mockResolvedValueOnce({ id: "m1", attempts: 1, token: "t1" });
+    driver.reserve.mockResolvedValueOnce({ id: "m1", attempts: 1, token: "t1", payload: "x" });
     const reserved = await queue.reserve("jobs", NOW, NOW + 1_000);
     await expect(reserved?.release(NOW + 12 * HOUR + 1, NOW)).rejects.toThrow(LimitError);
     expect(driver.release).not.toHaveBeenCalled();
@@ -268,7 +269,7 @@ describe("close (C1-C4, Z6, D7, L8)", () => {
 
   it("C4, B6, D7, L8: a Reserved from a closed queue throws QueueClosedError on delete and release", async () => {
     const { driver, queue } = setup();
-    driver.reserve.mockResolvedValueOnce({ id: "m1", attempts: 1, token: "t1" });
+    driver.reserve.mockResolvedValueOnce({ id: "m1", attempts: 1, token: "t1", payload: "x" });
     const reserved = await queue.reserve("jobs", NOW, NOW + 1_000);
     await queue.close();
     await expect(reserved?.delete(NOW)).rejects.toThrow(QueueClosedError);
