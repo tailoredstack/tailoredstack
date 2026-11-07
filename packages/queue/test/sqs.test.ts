@@ -13,6 +13,72 @@ import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { createSqsDriver } from "../src/sqs.js";
 import { driverContract } from "../src/testing/driver-contract.js";
 
+const T0 = 1_000_000;
+
+// Wraps the client so a test can see the receipt handles the driver received, and act on them as SQS would in real time.
+function recording(): { client: SQSClient; received: { QueueUrl: string; ReceiptHandle: string }[] } {
+  const client = connect();
+  const send = client.send.bind(client);
+  const received: { QueueUrl: string; ReceiptHandle: string }[] = [];
+  client.send = (async (command: object) => {
+    const reply = await send(command as never);
+    if (command instanceof ReceiveMessageCommand) {
+      const url = command.input.QueueUrl ?? "";
+      for (const message of reply.Messages ?? []) {
+        received.push({ QueueUrl: url, ReceiptHandle: message.ReceiptHandle ?? "" });
+      }
+    }
+    return reply;
+  }) as typeof client.send;
+  return { client, received };
+}
+
+describe("sqs lease ownership", () => {
+  it("keeps a live lease hidden when SQS makes its message visible before the lease ends", async () => {
+    const { client, received } = recording();
+    const driver = createSqsDriver({ client, queueNamePrefix: freshPrefix() });
+    await driver.push("jobs", "body", { availableAt: T0, now: T0 });
+    const lease = await driver.reserve("jobs", T0, T0 + 60_000);
+    if (lease === null) throw new Error("expected a lease");
+    const [seen] = received;
+    if (seen === undefined) throw new Error("expected a received message");
+    // SQS restores visibility on its own clock, while the caller's lease still runs.
+    await client.send(
+      new ChangeMessageVisibilityCommand({
+        QueueUrl: seen.QueueUrl,
+        ReceiptHandle: seen.ReceiptHandle,
+        VisibilityTimeout: 0,
+      }),
+    );
+    await expect(driver.reserve("jobs", T0 + 1, T0 + 60_000)).resolves.toBeNull();
+    await expect(driver.delete("jobs", lease.token, T0 + 1)).resolves.toBe(true);
+  });
+
+  it("does not lease a message another instance holds when the first instance's lease ends", async () => {
+    const prefix = freshPrefix();
+    const { client, received } = recording();
+    const first = createSqsDriver({ client, queueNamePrefix: prefix });
+    const second = createSqsDriver({ client: connect(), queueNamePrefix: prefix });
+    await first.push("jobs", "body", { availableAt: T0, now: T0 });
+    const lease = await first.reserve("jobs", T0, T0 + 1_000);
+    if (lease === null) throw new Error("expected a lease");
+    const [seen] = received;
+    if (seen === undefined) throw new Error("expected a received message");
+    await client.send(
+      new ChangeMessageVisibilityCommand({
+        QueueUrl: seen.QueueUrl,
+        ReceiptHandle: seen.ReceiptHandle,
+        VisibilityTimeout: 0,
+      }),
+    );
+    const held = await second.reserve("jobs", T0 + 500, T0 + 60_000);
+    if (held === null) throw new Error("expected the second instance to lease the message");
+    // The first lease ends on the caller's clock; its old receipt must not free the message the second instance holds.
+    await expect(first.reserve("jobs", T0 + 1_000, T0 + 2_000)).resolves.toBeNull();
+    await expect(second.delete("jobs", held.token, T0 + 500)).resolves.toBe(true);
+  });
+});
+
 // Each SQS call may wait up to 1 s for a long poll; the contract's empty reserves take that long.
 vi.setConfig({ testTimeout: 60_000 });
 
