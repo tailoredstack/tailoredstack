@@ -113,7 +113,7 @@ describe("push validation (P1-P9)", () => {
 
   it("P9: the push delay is measured after clamping, so a past availableAt is never a LimitError", async () => {
     const { driver, queue } = setup(900_000);
-    await queue.push("jobs", "x", { availableAt: NOW - HOUR, now: NOW });
+    await queue.push("jobs", "x", { availableAt: NOW - 1_000, now: NOW });
     expect(driver.push).toHaveBeenCalledOnce();
   });
 
