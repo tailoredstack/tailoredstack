@@ -39,6 +39,7 @@ export function createQueue(driver: Driver): Queue {
     const { token } = lease;
     return {
       id: lease.id,
+      payload: lease.payload,
       attempts: lease.attempts,
       delete: (now) =>
         run(async () => {
