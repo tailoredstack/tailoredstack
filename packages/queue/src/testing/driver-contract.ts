@@ -17,6 +17,8 @@ import {
   TWELVE_HOURS,
 } from "./actors.js";
 
+const HUNDRED_YEARS = 100 * 365 * 24 * 3_600_000;
+
 export interface DriverFixture {
   readonly driver: Driver;
   /** A second driver on the same backend. Required when `capabilities.shared` is true. */
@@ -133,13 +135,20 @@ export function driverContract(options: DriverContractOptions): void {
         await expectSize(h.queue, exactCounts, empty(), T0);
       });
 
-      it("P9: a delay over maxPushDelayMs is LimitError; exactly maxPushDelayMs is accepted", async () => {
-        const h = await open();
-        const max = capabilities.maxPushDelayMs;
-        await expect(h.queue.push(NAME, "p9", at(T0 + max + 1))).rejects.toThrow(LimitError);
-        await expectSize(h.queue, exactCounts, empty(), T0);
-        await expect(h.queue.push(NAME, "p9", at(T0 + max))).resolves.toEqual(expect.any(String));
-      });
+      if (Number.isFinite(capabilities.maxPushDelayMs)) {
+        it("P9: a delay over maxPushDelayMs is LimitError; exactly maxPushDelayMs is accepted", async () => {
+          const h = await open();
+          const max = capabilities.maxPushDelayMs;
+          await expect(h.queue.push(NAME, "p9", at(T0 + max + 1))).rejects.toThrow(LimitError);
+          await expectSize(h.queue, exactCounts, empty(), T0);
+          await expect(h.queue.push(NAME, "p9", at(T0 + max))).resolves.toEqual(expect.any(String));
+        });
+      } else {
+        it("P9: with no maxPushDelayMs cap, a push 100 years ahead is accepted", async () => {
+          const h = await open();
+          await expect(h.queue.push(NAME, "p9", at(T0 + HUNDRED_YEARS))).resolves.toEqual(expect.any(String));
+        });
+      }
 
       it("P10: the same payload pushed twice yields two messages with two ids", async () => {
         const { queue } = await open();

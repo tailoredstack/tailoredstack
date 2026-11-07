@@ -9,7 +9,7 @@ const HOUR = 3_600_000;
 
 driverContract({
   name: "memory",
-  capabilities: { shared: false, exactCounts: true, maxPushDelayMs: 43_200_000 },
+  capabilities: { shared: false, exactCounts: true, maxPushDelayMs: Number.POSITIVE_INFINITY },
   fixture: async () => ({ driver: createMemoryDriver() }),
 });
 
