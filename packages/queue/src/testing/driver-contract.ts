@@ -345,7 +345,7 @@ export function driverContract(options: DriverContractOptions): void {
         expect(first.payload).toBe("A");
       });
 
-      it("L5: stale release is false: after re-reserve, after delete, and a second release", async () => {
+      it("L5: stale release is false: after re-reserve, after delete, after expiry, and a second release", async () => {
         const { queue } = await open();
         await queue.push(NAME, "l5a", at(T0));
         const old = await mustReserve(queue, T0, T0 + SECOND);
@@ -363,6 +363,10 @@ export function driverContract(options: DriverContractOptions): void {
         const released = await mustReserve(queue, T0, T0 + SECOND);
         expect(await released.release(T0, T0)).toBe(true);
         expect(await released.release(T0, T0)).toBe(false);
+        await queue.push(NAME, "l5d", at(T0));
+        const expired = await mustReserve(queue, T0, T0 + SECOND);
+        expect(await expired.release(T0 + SECOND, T0 + SECOND)).toBe(false);
+        await expectSize(queue, exactCounts, { ready: 2, delayed: 0, reserved: 0 }, T0 + SECOND);
       });
 
       it("L6: invalid release times are InvalidArgumentError", async () => {
