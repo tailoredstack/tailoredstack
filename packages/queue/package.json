@@ -20,7 +20,8 @@
   ],
   "scripts": {
     "build": "tsc -p tsconfig.json",
-    "test": "vitest run",
+    "test": "vitest run --coverage",
+    "mutate": "node scripts/mutate.mjs",
     "typecheck": "tsc -p tsconfig.test.json",
     "lint": "biome check src test vitest.config.ts",
     "lint:fix": "biome check --write src test vitest.config.ts"
@@ -38,6 +39,7 @@
     "@testcontainers/redis": "^12.2.1",
     "@testcontainers/valkey": "^12.2.1",
     "@types/node": "^26.6.6",
+    "@vitest/coverage-v8": "^5.1.0",
     "ioredis": "^6.0.0",
     "typescript": "^7.0.2",
     "vitest": "^5.1.0"

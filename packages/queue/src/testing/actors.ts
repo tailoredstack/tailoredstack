@@ -117,6 +117,13 @@ export async function badB2InvalidTimes({ queue }: Harness): Promise<void> {
     await expect(queue.reserve(NAME, T0, bad)).rejects.toThrow(InvalidArgumentError);
     await expect(queue.size(NAME, bad)).rejects.toThrow(InvalidArgumentError);
   }
+  await queue.push(NAME, "b2", at(T0));
+  const reserved = await mustReserve(queue, T0, T0 + SECOND);
+  for (const bad of BAD_TIMES) {
+    await expect(reserved.delete(bad)).rejects.toThrow(InvalidArgumentError);
+    await expect(reserved.release(bad, T0)).rejects.toThrow(InvalidArgumentError);
+  }
+  expect(await reserved.delete(T0)).toBe(true);
 }
 
 export async function badB3LeaseNotAfterNow({ queue }: Harness): Promise<void> {
