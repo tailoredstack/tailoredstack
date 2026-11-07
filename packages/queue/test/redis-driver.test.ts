@@ -294,7 +294,6 @@ describe("race on one held job", () => {
     expect(total).toBe(released ? 1 : 0);
   });
 
-
   it("when remove and fail race for the same held job, exactly one wins", async () => {
     const shared = `queue:${randomUUID()}:`;
     const a = new Redis(url, { maxRetriesPerRequest: 1 });
