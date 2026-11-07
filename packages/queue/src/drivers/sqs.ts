@@ -261,55 +261,58 @@ export class SqsQueueDriver implements QueueDriver {
 
   async #scanFailed(): Promise<void> {
     const records: Array<{ readonly body: Envelope; readonly receipt: string }> = [];
+    const receipts: string[] = [];
     this.#failedCache.clear();
     this.#failedReceipts.clear();
 
     // Temporarily hide each batch so the next ReceiveMessage call advances to the next page.
-    // Restore visibility to zero after the full scan; all received handles remain valid for mutation.
-    for (;;) {
-      const response = await this.#client.receiveMessage({
-        QueueUrl: this.#failedQueueUrl,
-        MaxNumberOfMessages: 10,
-        VisibilityTimeout: MAX_VISIBILITY,
-      });
-      const messages = response.Messages ?? [];
-      if (messages.length === 0) break;
-      for (const message of messages) {
-        records.push({
-          body: parseEnvelope(requiredString(message.Body, "SQS failed message body")),
-          receipt: requiredString(message.ReceiptHandle, "SQS failed ReceiptHandle"),
-        });
-      }
-    }
-
-    for (const { body, receipt } of records) {
-      if (
-        body.kind !== "failed" ||
-        !body.id ||
-        body.attempts === undefined ||
-        body.failedAt === undefined ||
-        body.error === undefined
-      )
-        continue;
-      this.#failedCache.set(body.id, {
-        id: body.id,
-        queue: body.queue,
-        payload: body.payload,
-        attempts: body.attempts,
-        error: body.error,
-        failedAt: body.failedAt,
-      });
-      this.#failedReceipts.set(body.id, receipt);
-    }
-    await Promise.all(
-      records.map(({ receipt }) =>
-        this.#client.changeMessageVisibility({
+    // Always restore every acquired handle, including when a subsequent page read or parse fails.
+    try {
+      for (;;) {
+        const response = await this.#client.receiveMessage({
           QueueUrl: this.#failedQueueUrl,
-          ReceiptHandle: receipt,
-          VisibilityTimeout: 0,
-        }),
-      ),
-    );
+          MaxNumberOfMessages: 10,
+          VisibilityTimeout: MAX_VISIBILITY,
+        });
+        const messages = response.Messages ?? [];
+        if (messages.length === 0) break;
+        for (const message of messages) {
+          const receipt = requiredString(message.ReceiptHandle, "SQS failed ReceiptHandle");
+          receipts.push(receipt);
+          records.push({ body: parseEnvelope(requiredString(message.Body, "SQS failed message body")), receipt });
+        }
+      }
+
+      for (const { body, receipt } of records) {
+        if (
+          body.kind !== "failed" ||
+          !body.id ||
+          body.attempts === undefined ||
+          body.failedAt === undefined ||
+          body.error === undefined
+        )
+          continue;
+        this.#failedCache.set(body.id, {
+          id: body.id,
+          queue: body.queue,
+          payload: body.payload,
+          attempts: body.attempts,
+          error: body.error,
+          failedAt: body.failedAt,
+        });
+        this.#failedReceipts.set(body.id, receipt);
+      }
+    } finally {
+      await Promise.all(
+        receipts.map((receipt) =>
+          this.#client.changeMessageVisibility({
+            QueueUrl: this.#failedQueueUrl,
+            ReceiptHandle: receipt,
+            VisibilityTimeout: 0,
+          }),
+        ),
+      );
+    }
   }
 
   async #deleteFailed(id: string): Promise<boolean> {
