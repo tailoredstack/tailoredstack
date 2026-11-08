@@ -61,4 +61,17 @@ describe("sqlite driver backend faults", () => {
     await driver.close();
     await expect(driver.push("jobs", "body", { availableAt: 0, now: 0 })).rejects.toThrow();
   });
+
+  it("accepts a push one day ahead and reserves it when due", async () => {
+    const queue = createQueue(createSqliteDriver({ path: tempPath() }));
+    const DAY = 86_400_000;
+    try {
+      await queue.push("jobs", "tomorrow", { availableAt: 1_000 + DAY, now: 1_000 });
+      expect(await queue.reserve("jobs", 1_000 + DAY - 1, 2_000 + DAY)).toBeNull();
+      const reserved = await queue.reserve("jobs", 1_000 + DAY, 2_000 + DAY);
+      expect(reserved?.payload).toBe("tomorrow");
+    } finally {
+      await queue.close();
+    }
+  });
 });
