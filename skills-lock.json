@@ -1,6 +1,12 @@
 {
   "version": 1,
   "skills": {
+    "floci": {
+      "source": "floci-io/floci-cli",
+      "sourceType": "github",
+      "skillPath": "skills/floci/SKILL.md",
+      "computedHash": "257297db44018a4735ec5318db7da6800b689d4c7b5444f635cba22cd192bbf9"
+    },
     "grill-me": {
       "source": "mattpocock/skills",
       "sourceType": "github",
