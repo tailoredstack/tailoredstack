@@ -1,6 +1,6 @@
 import { expect } from "vitest";
-import { InvalidArgumentError, LimitError, QueueClosedError } from "../errors.js";
-import type { Queue, QueueSize, Reserved } from "../types.js";
+import { InvalidArgumentError, LimitError, QueueClosedError } from "../errors.ts";
+import type { Queue, QueueSize, Reserved } from "../types.ts";
 
 // The suite injects every `now`. Nothing here reads a wall clock.
 export const NAME = "jobs";

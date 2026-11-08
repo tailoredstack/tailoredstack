@@ -1,4 +1,4 @@
-import { InvalidArgumentError, LimitError } from "./errors.js";
+import { InvalidArgumentError, LimitError } from "./errors.ts";
 
 export const MAX_NAME_PATTERN = /^[A-Za-z0-9_-]{1,80}$/;
 export const MAX_PAYLOAD_BYTES = 262_144;
