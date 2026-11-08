@@ -7,7 +7,7 @@ import {
   SendMessageCommand,
   SQSClient,
 } from "@aws-sdk/client-sqs";
-import { GenericContainer, type StartedTestContainer } from "testcontainers";
+import { FlociContainer, SqsConfig, type StartedFlociContainer } from "@floci/testcontainers";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { createSqsDriver, MAX_DRAIN_ROUNDS } from "../src/drivers/sqs.js";
 import { LimitError } from "../src/errors.ts";
@@ -137,16 +137,16 @@ describe("sqs message limit", () => {
 // Each SQS call may wait up to 1 s for a long poll; the contract's empty reserves take that long.
 vi.setConfig({ testTimeout: 60_000 });
 
-const ELASTICMQ_PORT = 9324;
-let container: StartedTestContainer;
-let endpoint: string;
+// Pinned, not `latest`, so a test run cannot change behavior underneath the driver.
+const FLOCI_IMAGE = "floci/floci:2.4.0";
+let container: StartedFlociContainer;
 const clients: SQSClient[] = [];
 
 function connect(): SQSClient {
   const client = new SQSClient({
-    endpoint,
-    region: "elasticmq",
-    credentials: { accessKeyId: "x", secretAccessKey: "x" },
+    endpoint: container.getEndpoint(),
+    region: container.getRegion(),
+    credentials: { accessKeyId: container.getAccessKey(), secretAccessKey: container.getSecretKey() },
   });
   clients.push(client);
   return client;
@@ -158,10 +158,7 @@ function freshPrefix(): string {
 }
 
 beforeAll(async () => {
-  container = await new GenericContainer("softwaremill/elasticmq-native:latest")
-    .withExposedPorts(ELASTICMQ_PORT)
-    .start();
-  endpoint = `http://${container.getHost()}:${container.getMappedPort(ELASTICMQ_PORT)}`;
+  container = await new FlociContainer(FLOCI_IMAGE).withSqsConfig(new SqsConfig(true, 30, 262144)).start();
 }, 120_000);
 
 afterAll(async () => {
@@ -361,7 +358,7 @@ describe("sqs driver backend faults", () => {
   });
 
   it("reads a receive reply without a Messages field as an empty batch", async () => {
-    // SQS omits Messages when nothing is visible; ElasticMQ returns an empty list, so this stubs the omitted form.
+    // SQS omits Messages when nothing is visible; this stubs the omitted form.
     const client = connect();
     const send = client.send.bind(client);
     client.send = (async (command: object) =>
