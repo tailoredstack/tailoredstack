@@ -1,5 +1,5 @@
-import { QueueClosedError } from "./errors.js";
-import type { Driver, DriverLease, Queue, Reserved } from "./types.js";
+import { QueueClosedError } from "./errors.ts";
+import type { Driver, DriverLease, Queue, Reserved } from "./types.ts";
 import {
   clampAvailableAt,
   validateLeaseWindow,
@@ -8,7 +8,7 @@ import {
   validatePushDelay,
   validateReleaseDelay,
   validateTime,
-} from "./validate.js";
+} from "./validate.ts";
 
 export function createQueue(driver: Driver): Queue {
   let closing = false;

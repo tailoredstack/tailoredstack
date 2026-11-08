@@ -1,5 +1,5 @@
 import { vi } from "vitest";
-import type { Driver } from "../src/index.js";
+import type { Driver } from "../src/index.ts";
 
 export function fakeDriver(maxPushDelayMs = Number.POSITIVE_INFINITY) {
   const driver = {

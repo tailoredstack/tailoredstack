@@ -1,4 +1,4 @@
-import type { Driver, DriverCapabilities, QueueSize } from "./types.js";
+import type { Driver, DriverCapabilities, QueueSize } from "./types.ts";
 
 interface Entry {
   readonly id: string;
