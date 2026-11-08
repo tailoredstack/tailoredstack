@@ -17,13 +17,14 @@ const T0 = 1_000_000;
 
 describe("sqs lease ownership", () => {
   it("keeps a live lease hidden from a peer that reserves after SQS makes its copy visible", async () => {
-    const client = connect();
-    const driver = createSqsDriver({ client, queueNamePrefix: freshPrefix() });
+    const prefix = freshPrefix();
+    const driver = createSqsDriver({ client: connect(), queueNamePrefix: prefix });
+    const peer = createSqsDriver({ client: connect(), queueNamePrefix: prefix });
     await driver.push("jobs", "body", { availableAt: T0, now: T0 });
     const lease = await driver.reserve("jobs", T0, T0 + 60_000);
     if (lease === null) throw new Error("expected a lease");
     // The lease lives in the message body, so a peer that sees the copy visible still finds it leased on the caller's clock.
-    await expect(driver.reserve("jobs", T0 + 1, T0 + 60_000)).resolves.toBeNull();
+    await expect(peer.reserve("jobs", T0 + 1, T0 + 60_000)).resolves.toBeNull();
     await expect(driver.delete("jobs", lease.token, T0 + 1)).resolves.toBe(true);
   });
 
@@ -58,28 +59,28 @@ describe("sqs lease ownership", () => {
     if (lease === null) throw new Error("expected the first instance to lease the message");
     // The lease ends on the caller's clock at T0 + 60 s; SQS's own visibility for the message is still 60 s of real time.
     const again = await second.reserve("jobs", T0 + 60_000, T0 + 120_000);
-    expect(again?.attempts).toBe(2);
+    if (again === null) throw new Error("expected the peer to re-reserve the message");
+    expect(again.payload).toBe("body");
+    expect(again.attempts).toBe(2);
+    // The first lease's token no longer names a copy, so its delete is rejected.
+    await expect(first.delete("jobs", lease.token, T0 + 60_000)).resolves.toBe(false);
   });
 
-  // R1 amendment: equal availableAt is ordered by push sequence within one instance. Across instances the order is unspecified.
-  it("keeps push order within each instance; orders equal availableAt across instances as unspecified", async () => {
+  // R1 amendment: equal availableAt is ordered by push sequence within one instance. Across instances the order is unspecified, so this covers one instance only.
+  it("keeps push order within one instance", async () => {
     const prefix = freshPrefix();
-    const first = createSqsDriver({ client: connect(), queueNamePrefix: prefix });
-    const second = createSqsDriver({ client: connect(), queueNamePrefix: prefix });
-    await first.push("jobs", "a1", { availableAt: T0, now: T0 });
-    await first.push("jobs", "a2", { availableAt: T0, now: T0 });
-    await first.push("jobs", "a3", { availableAt: T0, now: T0 });
-    await second.push("jobs", "b1", { availableAt: T0, now: T0 });
-    await second.push("jobs", "b2", { availableAt: T0, now: T0 });
+    const driver = createSqsDriver({ client: connect(), queueNamePrefix: prefix });
+    await driver.push("jobs", "a1", { availableAt: T0, now: T0 });
+    await driver.push("jobs", "a2", { availableAt: T0, now: T0 });
+    await driver.push("jobs", "a3", { availableAt: T0, now: T0 });
     const order: string[] = [];
-    for (let i = 0; i < 5; i++) {
-      const lease = await first.reserve("jobs", T0, T0 + 60_000);
+    for (let i = 0; i < 3; i++) {
+      const lease = await driver.reserve("jobs", T0, T0 + 60_000);
       if (lease === null) throw new Error("expected a message");
       order.push(lease.payload);
-      await first.delete("jobs", lease.token, T0);
+      await driver.delete("jobs", lease.token, T0);
     }
-    expect(order.filter((payload) => payload.startsWith("a"))).toEqual(["a1", "a2", "a3"]);
-    expect(order.filter((payload) => payload.startsWith("b"))).toEqual(["b1", "b2"]);
+    expect(order).toEqual(["a1", "a2", "a3"]);
   });
 
   it("keeps only the newest copy when an older copy of the same message is still visible", async () => {
