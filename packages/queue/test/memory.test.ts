@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { createMemoryDriver } from "../src/memory.ts";
+import { createMemoryDriver } from "../src/drivers/memory.ts";
 import { createQueue } from "../src/queue.ts";
 import { driverContract } from "./driver-contract.ts";
 

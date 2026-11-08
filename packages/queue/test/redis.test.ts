@@ -2,7 +2,7 @@ import { RedisContainer, type StartedRedisContainer } from "@testcontainers/redi
 import { type StartedValkeyContainer, ValkeyContainer } from "@testcontainers/valkey";
 import { Redis } from "ioredis";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { createRedisDriver, type RedisClient } from "../src/redis.ts";
+import { createRedisDriver, type RedisClient } from "../src/drivers/redis.ts";
 import { driverContract } from "./driver-contract.ts";
 
 interface Backend {

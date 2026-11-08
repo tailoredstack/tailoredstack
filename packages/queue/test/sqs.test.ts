@@ -9,7 +9,7 @@ import {
 } from "@aws-sdk/client-sqs";
 import { GenericContainer, type StartedTestContainer } from "testcontainers";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
-import { createSqsDriver } from "../src/sqs.js";
+import { createSqsDriver } from "../src/drivers/sqs.js";
 import type { Driver } from "../src/types.js";
 import { driverContract } from "./driver-contract.ts";
 
