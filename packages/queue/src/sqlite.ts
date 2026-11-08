@@ -7,7 +7,9 @@ export interface SqliteDriverOptions {
   readonly path: string;
   /**
    * Table that holds the messages. Defaults to "messages". Must match /^[A-Za-z_][A-Za-z0-9_]*$/
-   * because SQL identifiers cannot be bound parameters. Two drivers on one file with different tables are isolated.
+   * because SQL identifiers cannot be bound parameters. Names are case-insensitive: "Messages" and "messages" are one table.
+   * Names that are SQL keywords or end in "_ready" or "_token" are rejected, because those index names derive from the table name.
+   * Two drivers on one file with different tables are isolated.
    */
   readonly table?: string;
 }
@@ -21,6 +23,12 @@ export const SQLITE_CAPABILITIES: DriverCapabilities = {
 const DEFAULT_TABLE = "messages";
 const TABLE_NAME = /^[A-Za-z_][A-Za-z0-9_]*$/;
 
+const SQLITE_KEYWORDS = new Set(
+  "abort action add after all alter always analyze and as asc attach autoincrement before begin between by cascade case cast check collate column commit conflict constraint create cross current current_date current_time current_timestamp database default deferrable deferred delete desc detach distinct do drop each else end escape except exclude exclusive exists explain fail filter first following for foreign from full generated glob group groups having if ignore immediate in index indexed initially inner insert instead intersect into is isnull join key last left like limit match materialized natural no not nothing notnull null nulls of offset on or order others outer over partition plan pragma preceding primary query raise range recursive references regexp reindex release rename replace restrict returning right rollback row rows savepoint select set table temp temporary then ties to transaction trigger unbounded union unique update using vacuum values view virtual when where window with without".split(
+    " ",
+  ),
+);
+
 type ReadyRow = { seq: number; payload: string; attempts: number };
 type BucketRow = { bucket: "reserved" | "delayed" | "ready"; count: number };
 
@@ -31,6 +39,15 @@ export function createSqliteDriver({ path, table = DEFAULT_TABLE }: SqliteDriver
   if (!TABLE_NAME.test(table)) {
     throw new InvalidArgumentError(
       `invalid sqlite table name ${JSON.stringify(table)}: use letters, digits and underscores, starting with a letter or underscore`,
+    );
+  }
+  const lower = table.toLowerCase();
+  if (SQLITE_KEYWORDS.has(lower)) {
+    throw new InvalidArgumentError(`invalid sqlite table name ${JSON.stringify(table)}: it is a SQL keyword`);
+  }
+  if (lower.endsWith("_ready") || lower.endsWith("_token")) {
+    throw new InvalidArgumentError(
+      `invalid sqlite table name ${JSON.stringify(table)}: names ending in _ready or _token collide with index names`,
     );
   }
   const readyIndex = `${table}_ready`;
