@@ -21,7 +21,6 @@
   "scripts": {
     "build": "tsc -p tsconfig.json",
     "test": "vitest run --coverage",
-    "mutate": "node test/mutate.ts",
     "typecheck": "tsc -p tsconfig.test.json",
     "lint": "biome check src test vitest.config.ts",
     "lint:fix": "biome check --write src test vitest.config.ts"
