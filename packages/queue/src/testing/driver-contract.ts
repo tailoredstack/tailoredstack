@@ -1,8 +1,8 @@
 import { afterEach, describe, expect, it } from "vitest";
-import { InvalidArgumentError, LimitError, QueueClosedError } from "../errors.js";
-import { createQueue } from "../queue.js";
-import type { Driver, DriverCapabilities, Queue } from "../types.js";
-import * as actors from "./actors.js";
+import { InvalidArgumentError, LimitError, QueueClosedError } from "../errors.ts";
+import { createQueue } from "../queue.ts";
+import type { Driver, DriverCapabilities, Queue } from "../types.ts";
+import * as actors from "./actors.ts";
 import {
   at,
   BAD_TIMES,
@@ -15,7 +15,7 @@ import {
   SECOND,
   T0,
   TWELVE_HOURS,
-} from "./actors.js";
+} from "./actors.ts";
 
 const HUNDRED_YEARS = 100 * 365 * 24 * 3_600_000;
 

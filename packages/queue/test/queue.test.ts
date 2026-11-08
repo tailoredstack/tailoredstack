@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { createQueue, InvalidArgumentError, LimitError, QueueClosedError } from "../src/index.js";
-import { deferred, fakeDriver } from "./fake-driver.fake.js";
+import { createQueue, InvalidArgumentError, LimitError, QueueClosedError } from "../src/index.ts";
+import { deferred, fakeDriver } from "./fake-driver.fake.ts";
 
 const NOW = 1_000_000;
 const HOUR = 3_600_000;

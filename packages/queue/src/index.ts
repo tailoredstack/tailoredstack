@@ -1,3 +1,3 @@
-export { InvalidArgumentError, LimitError, QueueClosedError } from "./errors.js";
-export { createQueue } from "./queue.js";
-export type { Driver, DriverCapabilities, DriverLease, Queue, QueueSize, Reserved } from "./types.js";
+export { InvalidArgumentError, LimitError, QueueClosedError } from "./errors.ts";
+export { createQueue } from "./queue.ts";
+export type { Driver, DriverCapabilities, DriverLease, Queue, QueueSize, Reserved } from "./types.ts";

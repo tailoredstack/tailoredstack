@@ -3,10 +3,10 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { afterEach, describe, expect, it } from "vitest";
-import { InvalidArgumentError } from "../src/errors.js";
-import { createQueue } from "../src/queue.js";
-import { createSqliteDriver } from "../src/sqlite.js";
-import { driverContract } from "../src/testing/driver-contract.js";
+import { InvalidArgumentError } from "../src/errors.ts";
+import { createQueue } from "../src/queue.ts";
+import { createSqliteDriver } from "../src/sqlite.ts";
+import { driverContract } from "../src/testing/driver-contract.ts";
 
 const dirs: string[] = [];
 const admins: DatabaseSync[] = [];
