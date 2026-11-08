@@ -9,7 +9,7 @@ import {
 } from "@aws-sdk/client-sqs";
 import { GenericContainer, type StartedTestContainer } from "testcontainers";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
-import { createSqsDriver } from "../src/drivers/sqs.js";
+import { createSqsDriver, MAX_DRAIN_ROUNDS } from "../src/drivers/sqs.js";
 import { LimitError } from "../src/errors.ts";
 import type { Driver } from "../src/types.js";
 import { driverContract } from "./driver-contract.ts";
@@ -186,23 +186,31 @@ driverContract({
   },
 });
 
-// A client whose next call of one SDK command class fails with the given error; every other call goes through.
-function injectable(): { client: SQSClient; arm: (command: new (...args: never[]) => object, failure: Error) => void } {
+// A client whose next call of one SDK command class fails with the given error. `after` lets that many matching calls
+// succeed first; every other call goes through.
+function injectable(): {
+  client: SQSClient;
+  arm: (command: new (...args: never[]) => object, failure: Error, after?: number) => void;
+} {
   const client = connect();
   const send = client.send.bind(client);
-  let armed: { command: new (...args: never[]) => object; failure: Error } | undefined;
+  let armed: { command: new (...args: never[]) => object; failure: Error; after: number } | undefined;
   client.send = ((command: object) => {
     if (armed !== undefined && command instanceof armed.command) {
-      const { failure } = armed;
-      armed = undefined;
-      return Promise.reject(failure);
+      if (armed.after > 0) {
+        armed.after -= 1;
+      } else {
+        const { failure } = armed;
+        armed = undefined;
+        return Promise.reject(failure);
+      }
     }
     return send(command as never);
   }) as typeof client.send;
   return {
     client,
-    arm: (command, failure) => {
-      armed = { command, failure };
+    arm: (command, failure, after = 0) => {
+      armed = { command, failure, after };
     },
   };
 }
@@ -361,5 +369,83 @@ describe("sqs driver backend faults", () => {
     const driver = createSqsDriver({ client, queueNamePrefix: freshPrefix() });
     await expect(driver.reserve("jobs", 0, 1_000)).resolves.toBeNull();
     await expect(driver.size("jobs", 0)).resolves.toEqual({ ready: 0, delayed: 0, reserved: 0 });
+  });
+
+  it("restores every drained copy when a later restore fails in reserve", async () => {
+    const prefix = freshPrefix();
+    const seeded = createSqsDriver({ client: connect(), queueNamePrefix: prefix });
+    for (const payload of ["a", "b", "c"]) await seeded.push("jobs", payload, { availableAt: 0, now: 0 });
+    const { client, arm } = injectable();
+    const driver = createSqsDriver({ client, queueNamePrefix: prefix });
+    const failure = new Error("restore refused");
+    // The first restore succeeds; the second fails, leaving the third copy drained and not restored.
+    arm(ChangeMessageVisibilityCommand, failure, 1);
+    await expect(driver.reserve("jobs", 0, 1_000)).rejects.toBe(failure);
+    // Every copy must be receivable now, not only after HOLD_SECONDS.
+    const payloads: string[] = [];
+    for (let i = 0; i < 3; i++) {
+      const lease = await seeded.reserve("jobs", 0, 1_000);
+      if (lease === null) throw new Error("expected a visible copy");
+      payloads.push(lease.payload);
+    }
+    expect(payloads.sort()).toEqual(["a", "b", "c"]);
+  });
+
+  it("restores every drained copy when a later restore fails in size", async () => {
+    const prefix = freshPrefix();
+    const seeded = createSqsDriver({ client: connect(), queueNamePrefix: prefix });
+    for (const payload of ["a", "b", "c"]) await seeded.push("jobs", payload, { availableAt: 0, now: 0 });
+    const { client, arm } = injectable();
+    const driver = createSqsDriver({ client, queueNamePrefix: prefix });
+    const failure = new Error("restore refused");
+    arm(ChangeMessageVisibilityCommand, failure, 1);
+    await expect(driver.size("jobs", 0)).rejects.toBe(failure);
+    await expect(seeded.size("jobs", 0)).resolves.toEqual({ ready: 3, delayed: 0, reserved: 0 });
+  });
+
+  it("gives up a drain that never empties and restores every copy it drained", async () => {
+    const drained = new Set<string>();
+    const restored = new Set<string>();
+    // Stops the fake after this many receives so a driver without the cap still returns; the cap must sit below it.
+    const FAKE_RECEIVES = 2_000;
+    let receives = 0;
+    let next = 0;
+    const client = {
+      send: async (command: object) => {
+        if (command instanceof CreateQueueCommand) return { QueueUrl: "https://fake/jobs" };
+        if (command instanceof ReceiveMessageCommand) {
+          receives += 1;
+          if (receives > FAKE_RECEIVES) return {};
+          // Every receive returns ten fresh copies that are not yet due, so a drain never ends on its own.
+          const Messages = Array.from({ length: 10 }, () => {
+            const n = next++;
+            const receipt = `r${n}`;
+            drained.add(receipt);
+            const stored = {
+              id: `m${n}`,
+              payload: "",
+              pushSeq: n,
+              version: 0,
+              availableAt: Number.MAX_SAFE_INTEGER,
+              attempts: 0,
+              leaseUntil: 0,
+              token: null,
+            };
+            return { MessageId: `m${n}`, ReceiptHandle: receipt, Body: JSON.stringify(stored) };
+          });
+          return { Messages };
+        }
+        if (command instanceof ChangeMessageVisibilityCommand) {
+          restored.add((command as ChangeMessageVisibilityCommand).input.ReceiptHandle as string);
+          return {};
+        }
+        throw new Error(`unexpected command ${command.constructor.name}`);
+      },
+      destroy: () => {},
+    } as unknown as SQSClient;
+    const driver = createSqsDriver({ client, queueNamePrefix: freshPrefix() });
+    await expect(driver.reserve("jobs", 0, 1_000)).rejects.toThrow("did not drain");
+    expect(receives).toBe(MAX_DRAIN_ROUNDS);
+    expect(restored).toEqual(drained);
   });
 });
