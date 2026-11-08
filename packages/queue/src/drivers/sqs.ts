@@ -157,11 +157,14 @@ export function createSqsDriver({ client, queueNamePrefix }: SqsDriverOptions): 
     return current;
   }
 
-  async function remove(url: string, message: Message): Promise<void> {
+  // Returns false when SQS rejects the receipt as stale: this call did not remove the copy.
+  async function remove(url: string, message: Message): Promise<boolean> {
     try {
       await client.send(new DeleteMessageCommand({ QueueUrl: url, ReceiptHandle: message.ReceiptHandle }));
+      return true;
     } catch (error) {
       if (!isStaleReceipt(error)) throw error;
+      return false;
     }
   }
 
@@ -249,8 +252,7 @@ export function createSqsDriver({ client, queueNamePrefix }: SqsDriverOptions): 
         const copies = await scan(url);
         const target = await holder(url, copies, token, now);
         if (target === undefined) return false;
-        await remove(url, target.message);
-        return true;
+        return remove(url, target.message);
       });
     },
 
