@@ -71,7 +71,7 @@ export function createSqliteDriver({ path }: SqliteDriverOptions): Driver {
         }
         db.exec("COMMIT");
       } catch (error) {
-        db.exec("ROLLBACK");
+        if (db.isTransaction) db.exec("ROLLBACK");
         throw error;
       }
       return result;
