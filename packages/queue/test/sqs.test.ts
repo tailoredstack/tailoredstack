@@ -391,6 +391,27 @@ describe("sqs driver backend faults", () => {
     expect(payloads.sort()).toEqual(["a", "b", "c"]);
   });
 
+  it("keeps the original error when every cleanup restore also fails", async () => {
+    const prefix = freshPrefix();
+    const seeded = createSqsDriver({ client: connect(), queueNamePrefix: prefix });
+    for (const payload of ["a", "b", "c"]) await seeded.push("jobs", payload, { availableAt: 0, now: 0 });
+    const client = connect();
+    const send = client.send.bind(client);
+    const failure = new Error("restore refused");
+    let restoreCalls = 0;
+    client.send = ((command: object) => {
+      if (command instanceof ChangeMessageVisibilityCommand) {
+        restoreCalls += 1;
+        return Promise.reject(failure);
+      }
+      return send(command as never);
+    }) as typeof client.send;
+    const driver = createSqsDriver({ client, queueNamePrefix: prefix });
+    // The task's restore fails first, then every cleanup restore fails too. The cleanup failures are swallowed.
+    await expect(driver.reserve("jobs", 0, 1_000)).rejects.toBe(failure);
+    expect(restoreCalls).toBeGreaterThan(1);
+  });
+
   it("restores every drained copy when a later restore fails in size", async () => {
     const prefix = freshPrefix();
     const seeded = createSqsDriver({ client: connect(), queueNamePrefix: prefix });
