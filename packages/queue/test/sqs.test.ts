@@ -424,6 +424,47 @@ describe("sqs driver backend faults", () => {
     await expect(seeded.size("jobs", 0)).resolves.toEqual({ ready: 3, delayed: 0, reserved: 0 });
   });
 
+  it("drains exactly MAX_DRAIN_ROUNDS full rounds without throwing", async () => {
+    const restored = new Set<string>();
+    let receives = 0;
+    let next = 0;
+    const client = {
+      send: async (command: object) => {
+        if (command instanceof CreateQueueCommand) return { QueueUrl: "https://fake/jobs" };
+        if (command instanceof ReceiveMessageCommand) {
+          receives += 1;
+          // Exactly MAX_DRAIN_ROUNDS non-empty receives of ten copies each, then an empty receive ends the drain.
+          if (receives > MAX_DRAIN_ROUNDS) return {};
+          const Messages = Array.from({ length: 10 }, () => {
+            const n = next++;
+            const stored = {
+              id: `m${n}`,
+              payload: "",
+              pushSeq: n,
+              version: 0,
+              availableAt: Number.MAX_SAFE_INTEGER,
+              attempts: 0,
+              leaseUntil: 0,
+              token: null,
+            };
+            return { MessageId: `m${n}`, ReceiptHandle: `r${n}`, Body: JSON.stringify(stored) };
+          });
+          return { Messages };
+        }
+        if (command instanceof ChangeMessageVisibilityCommand) {
+          restored.add((command as ChangeMessageVisibilityCommand).input.ReceiptHandle as string);
+          return {};
+        }
+        throw new Error(`unexpected command ${command.constructor.name}`);
+      },
+      destroy: () => {},
+    } as unknown as SQSClient;
+    const driver = createSqsDriver({ client, queueNamePrefix: freshPrefix() });
+    await expect(driver.reserve("jobs", 0, 1_000)).resolves.toBeNull();
+    expect(receives).toBe(MAX_DRAIN_ROUNDS + 1);
+    expect(restored.size).toBe(MAX_DRAIN_ROUNDS * 10);
+  });
+
   it("gives up a drain that never empties and restores every copy it drained", async () => {
     const drained = new Set<string>();
     const restored = new Set<string>();
