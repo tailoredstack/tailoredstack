@@ -1,4 +1,4 @@
-import type { Driver, DriverCapabilities, DriverLease, QueueSize } from "./types.ts";
+import type { Driver, DriverCapabilities, DriverLease, QueueSize } from "../types.ts";
 
 // The subset of an ioredis client the driver uses. The caller creates the client; close() quits it.
 export interface RedisClient {

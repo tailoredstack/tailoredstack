@@ -8,7 +8,7 @@ import {
   SendMessageCommand,
   type SQSClient,
 } from "@aws-sdk/client-sqs";
-import type { Driver, DriverCapabilities, QueueSize } from "./types.js";
+import type { Driver, DriverCapabilities, QueueSize } from "../types.js";
 
 // The part of an AWS SDK v3 SQS client the driver uses. The caller owns the client; close() destroys it.
 export type SqsClient = Pick<SQSClient, "send" | "destroy">;

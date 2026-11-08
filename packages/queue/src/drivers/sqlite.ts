@@ -1,6 +1,6 @@
 import { DatabaseSync, type StatementSync } from "node:sqlite";
-import { InvalidArgumentError } from "./errors.ts";
-import type { Driver, DriverCapabilities, DriverLease, QueueSize } from "./types.ts";
+import { InvalidArgumentError } from "../errors.ts";
+import type { Driver, DriverCapabilities, DriverLease, QueueSize } from "../types.ts";
 
 export interface SqliteDriverOptions {
   /** Database file. Several drivers may open the same file; they share one queue. */
