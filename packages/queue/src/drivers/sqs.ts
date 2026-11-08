@@ -181,12 +181,6 @@ export function createSqsDriver({ client, queueNamePrefix }: SqsDriverOptions): 
     const messages: Message[] = [];
     let rounds = 0;
     for (;;) {
-      if (rounds === MAX_DRAIN_ROUNDS) {
-        throw new Error(
-          `SQS queue did not drain after ${MAX_DRAIN_ROUNDS} receive rounds; the queue may hold too many messages`,
-        );
-      }
-      rounds += 1;
       const reply = await client.send(
         new ReceiveMessageCommand({
           QueueUrl: url,
@@ -197,8 +191,15 @@ export function createSqsDriver({ client, queueNamePrefix }: SqsDriverOptions): 
       );
       const batch = reply.Messages ?? [];
       if (batch.length === 0) return messages;
+      // The batch is held before the cap throws, so run() restores it.
       for (const message of batch) hold.add(message);
       messages.push(...batch);
+      rounds += 1;
+      if (rounds > MAX_DRAIN_ROUNDS) {
+        throw new Error(
+          `SQS queue did not drain after ${MAX_DRAIN_ROUNDS} receive rounds; the queue may hold too many messages`,
+        );
+      }
     }
   }
 
