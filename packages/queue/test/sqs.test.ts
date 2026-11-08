@@ -126,6 +126,12 @@ describe("sqs message limit", () => {
     await expect(driver.push("jobs", "a".repeat(200_000), { availableAt: T0, now: T0 })).rejects.toThrow(LimitError);
     await expect(driver.size("jobs", T0)).resolves.toEqual({ ready: 0, delayed: 0, reserved: 0 });
   });
+  it("rejects a push whose envelope would exceed the limit once a reserve rewrites it, and stores nothing", async () => {
+    const driver = createSqsDriver({ client: connect(), queueNamePrefix: freshPrefix() });
+    // 196 497 raw bytes still fit in one message as pushed, but a reserve adds the token and lease fields and pushes the envelope over 262 144.
+    await expect(driver.push("jobs", "a".repeat(196_497), { availableAt: T0, now: T0 })).rejects.toThrow(LimitError);
+    await expect(driver.size("jobs", T0)).resolves.toEqual({ ready: 0, delayed: 0, reserved: 0 });
+  });
 });
 
 // Each SQS call may wait up to 1 s for a long poll; the contract's empty reserves take that long.
@@ -169,6 +175,8 @@ afterAll(async () => {
 driverContract({
   name: "sqs",
   capabilities: { shared: true, exactCounts: false, maxPushDelayMs: 900_000 },
+  // Largest raw payload whose envelope still fits 262144 bytes after a reserve rewrites it at T0 (1_000_000). Derived by measuring the envelope with every counter at MAX_SAFE_INTEGER and a 36-character token.
+  maxPayloadBytes: 196_440,
   fixture: async () => {
     const prefix = freshPrefix();
     return {

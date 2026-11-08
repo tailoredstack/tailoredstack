@@ -8,6 +8,7 @@ import {
   SendMessageCommand,
   type SQSClient,
 } from "@aws-sdk/client-sqs";
+import { LimitError } from "../errors.ts";
 import type { Driver, DriverCapabilities, QueueSize } from "../types.ts";
 
 // The part of an AWS SDK v3 SQS client the driver uses. The caller owns the client; close() destroys it.
@@ -24,6 +25,9 @@ export const SQS_CAPABILITIES: DriverCapabilities = {
   exactCounts: false,
   maxPushDelayMs: 900_000,
 };
+
+// SQS rejects a message body over this many bytes. The stored envelope, not the raw payload, is what must fit.
+const SQS_MAX_MESSAGE_BYTES = 262_144;
 
 // Every fact the driver needs lives in the message body. An SQS body cannot change, so each change sends a new copy and
 // deletes the old one. `version` tells copies of one message apart; the highest version is the current copy.
@@ -92,6 +96,30 @@ function splitCopies(copies: Copy[]): { current: Copy[]; superseded: Copy[] } {
     }
   }
   return { current: [...newest.values()], superseded };
+}
+
+// Serializes a stored message for SQS. The check runs before any send, so an envelope over the limit is rejected here
+// with a LimitError rather than by SQS.
+function envelope(stored: StoredMessage): string {
+  const body = JSON.stringify(stored);
+  const bytes = Buffer.byteLength(body, "utf8");
+  if (bytes > SQS_MAX_MESSAGE_BYTES) {
+    throw new LimitError(`message envelope must be at most ${SQS_MAX_MESSAGE_BYTES} bytes, got ${bytes}`);
+  }
+  return body;
+}
+
+// A reserve rewrites the copy with a token, a lease, and bumped counters, so the envelope grows. Push measures the
+// largest form a reserve can produce (every counter at MAX_SAFE_INTEGER, a 36-character token), so a message that
+// fits when pushed still fits after any reserve or release rewrites it.
+function reservedUpperBound(stored: StoredMessage): StoredMessage {
+  return {
+    ...stored,
+    attempts: Number.MAX_SAFE_INTEGER,
+    leaseUntil: Number.MAX_SAFE_INTEGER,
+    token: "0".repeat(36),
+    version: Number.MAX_SAFE_INTEGER,
+  };
 }
 
 export function createSqsDriver({ client, queueNamePrefix }: SqsDriverOptions): Driver {
@@ -184,7 +212,7 @@ export function createSqsDriver({ client, queueNamePrefix }: SqsDriverOptions): 
 
   // SQS cannot change a body. The replacement is sent first, so a failure leaves the old copy rather than nothing.
   async function rewrite(url: string, copy: Copy, next: StoredMessage): Promise<void> {
-    await client.send(new SendMessageCommand({ QueueUrl: url, MessageBody: JSON.stringify(next) }));
+    await client.send(new SendMessageCommand({ QueueUrl: url, MessageBody: envelope(next) }));
     await remove(url, copy.message);
   }
 
@@ -213,7 +241,8 @@ export function createSqsDriver({ client, queueNamePrefix }: SqsDriverOptions): 
           leaseUntil: 0,
           token: null,
         };
-        await client.send(new SendMessageCommand({ QueueUrl: url, MessageBody: JSON.stringify(stored) }));
+        envelope(reservedUpperBound(stored));
+        await client.send(new SendMessageCommand({ QueueUrl: url, MessageBody: envelope(stored) }));
         return stored.id;
       });
     },
