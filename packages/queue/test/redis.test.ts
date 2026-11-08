@@ -1,5 +1,5 @@
 import { RedisContainer, type StartedRedisContainer } from "@testcontainers/redis";
-import { StartedValkeyContainer, ValkeyContainer } from "@testcontainers/valkey";
+import { type StartedValkeyContainer, ValkeyContainer } from "@testcontainers/valkey";
 import { Redis } from "ioredis";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { createRedisDriver, type RedisClient } from "../src/redis.ts";
