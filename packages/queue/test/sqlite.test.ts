@@ -56,6 +56,26 @@ describe("sqlite driver backend faults", () => {
     }
   });
 
+  it("propagates the original error when SQLite already rolled back the reserve transaction", async () => {
+    const path = tempPath();
+    const driver = createSqliteDriver({ path });
+    const queue = createQueue(driver);
+    const admin = new DatabaseSync(path);
+    admins.push(admin);
+    try {
+      await queue.push("jobs", "body", { availableAt: 1_000, now: 1_000 });
+      admin.exec(
+        "CREATE TRIGGER rollback_reserve BEFORE UPDATE OF attempts ON messages BEGIN SELECT RAISE(ROLLBACK, 'disk full'); END;",
+      );
+      await expect(queue.reserve("jobs", 1_000, 2_000)).rejects.toMatchObject({ message: "disk full" });
+      admin.exec("DROP TRIGGER rollback_reserve");
+      const reserved = await queue.reserve("jobs", 1_000, 2_000);
+      expect(reserved?.attempts).toBe(1);
+    } finally {
+      await queue.close();
+    }
+  });
+
   it("throws when used after the driver is closed", async () => {
     const driver = createSqliteDriver({ path: tempPath() });
     await driver.close();
