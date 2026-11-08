@@ -1,4 +1,4 @@
-import { mkdtempSync, rmSync } from "node:fs";
+import { existsSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
@@ -191,5 +191,54 @@ describe("sqlite driver table option", () => {
     const path = tempPath();
     expect(() => createSqliteDriver({ path, table })).toThrow(InvalidArgumentError);
     expect(() => createSqliteDriver({ path, table })).toThrow(/table/);
+  });
+
+  it("rejects a table name that collides with the default index names on a file the default driver uses", async () => {
+    const path = tempPath();
+    const queue = createQueue(createSqliteDriver({ path }));
+    try {
+      expect(() => createSqliteDriver({ path, table: "messages_ready" })).toThrow(InvalidArgumentError);
+      expect(() => createSqliteDriver({ path, table: "messages_ready" })).toThrow(/table/);
+      expect(schemaNames(path, "index")).toEqual(["messages_ready", "messages_token"]);
+    } finally {
+      await queue.close();
+    }
+  });
+
+  it.each([
+    ["a default ready index name", "messages_ready"],
+    ["a default token index name", "messages_token"],
+    ["a token index name of another table", "jobs_token"],
+    ["an upper-case ready index name", "JOBS_READY"],
+  ])("rejects a table name that is %s before opening the file", (_label, table) => {
+    const path = tempPath();
+    expect(() => createSqliteDriver({ path, table })).toThrow(InvalidArgumentError);
+    expect(existsSync(path)).toBe(false);
+  });
+
+  it.each([
+    ["lower case", "select"],
+    ["upper case", "SELECT"],
+    ["mixed case", "Table"],
+    ["a keyword used as a table", "where"],
+  ])("rejects a SQL keyword as a table name (%s) before opening the file", (_label, table) => {
+    const path = tempPath();
+    expect(() => createSqliteDriver({ path, table })).toThrow(InvalidArgumentError);
+    expect(existsSync(path)).toBe(false);
+  });
+
+  it("treats table names case-insensitively, so Messages is the default queue", async () => {
+    const path = tempPath();
+    const upper = createQueue(createSqliteDriver({ path, table: "Messages" }));
+    const lower = createQueue(createSqliteDriver({ path }));
+    try {
+      await upper.push("jobs", "shared", { availableAt: T0, now: T0 });
+      expect(await lower.size("jobs", T0)).toEqual({ ready: 1, delayed: 0, reserved: 0 });
+      expect((await lower.reserve("jobs", T0, LEASE))?.payload).toBe("shared");
+      expect(schemaNames(path, "table")).toEqual(["Messages"]);
+    } finally {
+      await upper.close();
+      await lower.close();
+    }
   });
 });
