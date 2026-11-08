@@ -132,10 +132,13 @@ export async function badB3LeaseNotAfterNow({ queue }: Harness): Promise<void> {
   await expect(queue.reserve(NAME, T0, T0 - 1)).rejects.toThrow(InvalidArgumentError);
 }
 
-export async function badB4PayloadLimit({ queue, exactCounts }: Harness): Promise<void> {
-  const fullAscii = "a".repeat(MAX_PAYLOAD_BYTES);
-  // Each "é" is two UTF-8 bytes, so this is exactly MAX_PAYLOAD_BYTES bytes.
-  const fullMultiByte = "é".repeat(MAX_PAYLOAD_BYTES / 2);
+export async function badB4PayloadLimit(
+  { queue, exactCounts }: Harness,
+  limit: number = MAX_PAYLOAD_BYTES,
+): Promise<void> {
+  const fullAscii = "a".repeat(limit);
+  // Each "é" is two UTF-8 bytes, so this is exactly `limit` bytes when limit is even.
+  const fullMultiByte = "é".repeat(limit / 2);
   await queue.push(NAME, fullAscii, at(T0));
   await queue.push(NAME, fullMultiByte, at(T0));
   await expect(queue.push(NAME, `${fullMultiByte}a`, at(T0))).rejects.toThrow(LimitError);

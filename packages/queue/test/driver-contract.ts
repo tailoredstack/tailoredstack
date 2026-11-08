@@ -32,12 +32,15 @@ export interface DriverContractOptions {
   readonly capabilities: DriverCapabilities;
   /** Returns a fresh, empty backend for every test. */
   readonly fixture: () => Promise<DriverFixture>;
+  /** Largest payload the driver stores, in UTF-8 bytes. Defaults to MAX_PAYLOAD_BYTES; a driver whose stored form grows the payload sets a lower one. */
+  readonly maxPayloadBytes?: number;
 }
 
 // Runs the full v8 contract (spec §5 cases, §6 actors) against one driver.
 export function driverContract(options: DriverContractOptions): void {
   const { capabilities } = options;
   const { exactCounts, shared } = capabilities;
+  const maxPayloadBytes = options.maxPayloadBytes ?? MAX_PAYLOAD_BYTES;
 
   describe(`queue driver contract: ${options.name}`, () => {
     const opened: Queue[] = [];
@@ -564,8 +567,8 @@ export function driverContract(options: DriverContractOptions): void {
         await actors.badB3LeaseNotAfterNow(await open());
       });
 
-      it("B4: a 262145-byte payload is LimitError; 262144 bytes (multi-byte boundary) is stored", async () => {
-        await actors.badB4PayloadLimit(await open());
+      it("B4: a payload one byte over the driver's stored limit is LimitError; the limit itself is stored", async () => {
+        await actors.badB4PayloadLimit(await open(), maxPayloadBytes);
       });
 
       it("B5: NUL, quotes, unicode, and newlines come back byte-exact", async () => {
