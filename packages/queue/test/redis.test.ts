@@ -76,7 +76,7 @@ for (const backend of backends) {
         await expect(driver.push("jobs", "body", { availableAt: 0, now: 0 })).rejects.toBe(failure);
       });
 
-      it("rejects when the connection is lost", async () => {
+      it("rejects operations after the client is disconnected", async () => {
         const client = connect();
         const driver = createRedisDriver({ client });
         client.disconnect();
