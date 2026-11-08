@@ -328,11 +328,13 @@ export function driverContract(options: DriverContractOptions): void {
         const queue = createQueue(driver);
         opened.push(queue);
         await queue.push(NAME, "d9", at(T0));
-        const reserved = await mustReserve(queue, T0, T0 + SECOND);
-        const token = `${reserved.id}:${reserved.attempts}`;
-        expect(await driver.delete(OTHER_NAME, token, T0)).toBe(false);
+        const lease = await driver.reserve(NAME, T0, T0 + SECOND);
+        if (lease === null) {
+          throw new Error(`expected a reservation at now=${T0}`);
+        }
+        expect(await driver.delete(OTHER_NAME, lease.token, T0)).toBe(false);
         await expectSize(queue, exactCounts, { ready: 0, delayed: 0, reserved: 1 }, T0);
-        expect(await reserved.delete(T0)).toBe(true);
+        expect(await driver.delete(NAME, lease.token, T0)).toBe(true);
       });
     });
 
@@ -440,11 +442,13 @@ export function driverContract(options: DriverContractOptions): void {
         const queue = createQueue(driver);
         opened.push(queue);
         await queue.push(NAME, "l10", at(T0));
-        const reserved = await mustReserve(queue, T0, T0 + SECOND);
-        const token = `${reserved.id}:${reserved.attempts}`;
-        expect(await driver.release(OTHER_NAME, token, T0, T0)).toBe(false);
+        const lease = await driver.reserve(NAME, T0, T0 + SECOND);
+        if (lease === null) {
+          throw new Error(`expected a reservation at now=${T0}`);
+        }
+        expect(await driver.release(OTHER_NAME, lease.token, T0, T0)).toBe(false);
         await expectSize(queue, exactCounts, { ready: 0, delayed: 0, reserved: 1 }, T0);
-        expect(await reserved.release(T0, T0)).toBe(true);
+        expect(await driver.release(NAME, lease.token, T0, T0)).toBe(true);
         const again = await mustReserve(queue, T0, T0 + SECOND);
         expect(again.attempts).toBe(2);
       });
