@@ -2,7 +2,7 @@ import { RedisContainer, type StartedRedisContainer } from "@testcontainers/redi
 import { Redis } from "ioredis";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { createRedisDriver, type RedisClient } from "../src/redis.ts";
-import { driverContract } from "../src/testing/driver-contract.ts";
+import { driverContract } from "./driver-contract.ts";
 
 let container: StartedRedisContainer;
 let url: string;

@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { createMemoryDriver } from "../src/memory.ts";
 import { createQueue } from "../src/queue.ts";
-import { driverContract } from "../src/testing/driver-contract.ts";
+import { driverContract } from "./driver-contract.ts";
 
 const T0 = 1_000_000;
 const SECOND = 1_000;
