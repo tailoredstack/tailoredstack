@@ -10,8 +10,8 @@ import {
 import { GenericContainer, type StartedTestContainer } from "testcontainers";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { createSqsDriver } from "../src/sqs.js";
-import { driverContract } from "../src/testing/driver-contract.js";
 import type { Driver } from "../src/types.js";
+import { driverContract } from "./driver-contract.ts";
 
 const T0 = 1_000_000;
 
