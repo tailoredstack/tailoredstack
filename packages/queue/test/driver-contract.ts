@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it } from "vitest";
-import { InvalidArgumentError, LimitError, QueueClosedError } from "../errors.ts";
-import { createQueue } from "../queue.ts";
-import type { Driver, DriverCapabilities, Queue } from "../types.ts";
+import { InvalidArgumentError, LimitError, QueueClosedError } from "../src/errors.ts";
+import { createQueue } from "../src/queue.ts";
+import type { Driver, DriverCapabilities, Queue } from "../src/types.ts";
 import * as actors from "./actors.ts";
 import {
   at,

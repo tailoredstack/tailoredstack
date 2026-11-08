@@ -6,7 +6,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import { InvalidArgumentError } from "../src/errors.ts";
 import { createQueue } from "../src/queue.ts";
 import { createSqliteDriver } from "../src/sqlite.ts";
-import { driverContract } from "../src/testing/driver-contract.ts";
+import { driverContract } from "./driver-contract.ts";
 
 const dirs: string[] = [];
 const admins: DatabaseSync[] = [];

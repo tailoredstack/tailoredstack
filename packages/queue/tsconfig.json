@@ -13,6 +13,5 @@
     "rewriteRelativeImportExtensions": true,
     "types": ["node"]
   },
-  "include": ["src"],
-  "exclude": ["src/testing"]
+  "include": ["src"]
 }
