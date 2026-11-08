@@ -10,6 +10,7 @@ import {
 import { GenericContainer, type StartedTestContainer } from "testcontainers";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { createSqsDriver } from "../src/drivers/sqs.js";
+import { LimitError } from "../src/errors.ts";
 import type { Driver } from "../src/types.js";
 import { driverContract } from "./driver-contract.ts";
 
@@ -115,6 +116,15 @@ describe("sqs lease ownership", () => {
     const second = await driver.reserve("jobs", 0, 1_000);
     expect([first?.payload, second?.payload].sort()).toEqual(["new-x", "new-y"]);
     await expect(driver.reserve("jobs", 0, 1_000)).resolves.toBeNull();
+  });
+});
+
+describe("sqs message limit", () => {
+  it("rejects a push whose stored envelope exceeds the SQS message limit, and stores nothing", async () => {
+    const driver = createSqsDriver({ client: connect(), queueNamePrefix: freshPrefix() });
+    // 200 000 raw bytes is within MAX_PAYLOAD_BYTES, but base64 grows it to about 266 700 bytes, over SQS's 262 144.
+    await expect(driver.push("jobs", "a".repeat(200_000), { availableAt: T0, now: T0 })).rejects.toThrow(LimitError);
+    await expect(driver.size("jobs", T0)).resolves.toEqual({ ready: 0, delayed: 0, reserved: 0 });
   });
 });
 
