@@ -8,7 +8,7 @@ export interface SqliteDriverOptions {
   /**
    * Table that holds the messages. Defaults to "messages". Must match /^[A-Za-z_][A-Za-z0-9_]*$/
    * because SQL identifiers cannot be bound parameters. Names are case-insensitive: "Messages" and "messages" are one table.
-   * Names that are SQL keywords or end in "_ready" or "_token" are rejected, because those index names derive from the table name.
+   * Names that are SQL keywords, start with "sqlite_" or end in "_ready" or "_token" are rejected, because SQLite reserves the first and those index names derive from the table name.
    * Two drivers on one file with different tables are isolated.
    */
   readonly table?: string;
@@ -48,6 +48,11 @@ export function createSqliteDriver({ path, table = DEFAULT_TABLE }: SqliteDriver
   if (lower.endsWith("_ready") || lower.endsWith("_token")) {
     throw new InvalidArgumentError(
       `invalid sqlite table name ${JSON.stringify(table)}: names ending in _ready or _token collide with index names`,
+    );
+  }
+  if (lower.startsWith("sqlite_")) {
+    throw new InvalidArgumentError(
+      `invalid sqlite table name ${JSON.stringify(table)}: the sqlite_ prefix is reserved for internal tables`,
     );
   }
   const readyIndex = `${table}_ready`;
