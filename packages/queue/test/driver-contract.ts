@@ -311,6 +311,16 @@ export function driverContract(options: DriverContractOptions): void {
         await queue.close();
         await expect(reserved.delete(T0)).rejects.toThrow(QueueClosedError);
       });
+
+      it("D8: a token the driver never issued deletes as false, and the live lease is untouched", async () => {
+        const { driver } = await options.fixture();
+        const queue = createQueue(driver);
+        opened.push(queue);
+        await queue.push(NAME, "d8", at(T0));
+        const reserved = await mustReserve(queue, T0, T0 + SECOND);
+        expect(await driver.delete(NAME, "garbage", T0)).toBe(false);
+        expect(await reserved.delete(T0)).toBe(true);
+      });
     });
 
     describe("release", () => {
@@ -401,8 +411,17 @@ export function driverContract(options: DriverContractOptions): void {
         await queue.close();
         await expect(reserved.release(T0, T0)).rejects.toThrow(QueueClosedError);
       });
-    });
 
+      it("L9: a token the driver never issued releases as false, and the live lease is untouched", async () => {
+        const { driver } = await options.fixture();
+        const queue = createQueue(driver);
+        opened.push(queue);
+        await queue.push(NAME, "l9", at(T0));
+        const reserved = await mustReserve(queue, T0, T0 + SECOND);
+        expect(await driver.release(NAME, "garbage", T0, T0)).toBe(false);
+        expect(await reserved.release(T0, T0)).toBe(true);
+      });
+    });
     describe("size", () => {
       it("Z1: an empty name reports zeros", async () => {
         const { queue } = await open();
