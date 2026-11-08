@@ -5,4 +5,5 @@ allowBuilds:
   protobufjs: false
   ssh2: false
 overrides:
+  "testcontainers@10": "^12.2.1"
   glob: ">=14.0.2"
