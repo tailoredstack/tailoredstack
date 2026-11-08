@@ -227,6 +227,16 @@ describe("sqlite driver table option", () => {
     expect(existsSync(path)).toBe(false);
   });
 
+  it.each([
+    ["lower case prefix", "sqlite_jobs"],
+    ["mixed case prefix", "SQLITE_x"],
+  ])("rejects a table name with the reserved sqlite_ prefix (%s) before opening the file", (_label, table) => {
+    const path = tempPath();
+    expect(() => createSqliteDriver({ path, table })).toThrow(InvalidArgumentError);
+    expect(() => createSqliteDriver({ path, table })).toThrow(/table/);
+    expect(existsSync(path)).toBe(false);
+  });
+
   it("treats table names case-insensitively, so Messages is the default queue", async () => {
     const path = tempPath();
     const upper = createQueue(createSqliteDriver({ path, table: "Messages" }));
