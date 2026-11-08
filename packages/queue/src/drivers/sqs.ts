@@ -48,9 +48,16 @@ interface Copy {
   readonly stored: StoredMessage;
 }
 
-// Drained messages stay hidden this long while one is chosen. Every drained copy is restored, deleted, or replaced before
-// the call returns, so the hold only matters when a call runs longer than this.
+// Messages a call has drained and not yet restored, deleted, or replaced. A call that fails restores what is left.
+type Hold = Set<Message>;
+
+// Drained messages stay hidden this long while one is chosen. A call that fails restores every copy it still holds, so
+// a copy stays hidden past this only if that restore also fails.
 const HOLD_SECONDS = 30;
+// A drain that never empties would hold the queue's serial chain forever under sustained pushes. Past this many receive
+// rounds the call throws instead of returning a partial drain, which would hide messages. The drained copies are then
+// restored. With 10 messages per round, a call can settle about 10,000 visible messages.
+export const MAX_DRAIN_ROUNDS = 1_000;
 // Returned when the receipt no longer belongs to the message's current receipt, for example after another instance
 // received the message again. The newer copy is then authoritative, so the stale receipt is ignored.
 const STALE_RECEIPT_CODES: Record<string, true> = {
@@ -143,9 +150,21 @@ export function createSqsDriver({ client, queueNamePrefix }: SqsDriverOptions): 
   }
 
   // Runs reserve, delete, release, and size calls for one queue one at a time. A drain hides messages, so overlapping
-  // calls would miss them.
-  function serial<T>(name: string, task: () => Promise<T>): Promise<T> {
-    const result = (chains.get(name) ?? Promise.resolve()).then(task);
+  // calls would miss them. A call that fails first restores the copies it drained and did not settle, then rethrows.
+  function run<T>(name: string, task: (url: string, hold: Hold) => Promise<T>): Promise<T> {
+    const result = (chains.get(name) ?? Promise.resolve()).then(async () => {
+      const url = await queueUrl(name);
+      const hold: Hold = new Set();
+      try {
+        return await task(url, hold);
+      } catch (error) {
+        for (const message of [...hold]) {
+          // A restore that also fails leaves that copy hidden until HOLD_SECONDS. The original error still wins.
+          await restore(url, message, hold).catch(() => undefined);
+        }
+        throw error;
+      }
+    });
     chains.set(
       name,
       result.then(
@@ -157,10 +176,17 @@ export function createSqsDriver({ client, queueNamePrefix }: SqsDriverOptions): 
   }
 
   // Receives every visible message of the queue. Each receive long-polls, so an empty receive means nothing is visible
-  // now; the drained messages stay hidden, so the drain ends.
-  async function drain(url: string): Promise<Message[]> {
+  // now; the drained messages stay hidden, so the drain ends. Each batch joins the hold before the next receive.
+  async function drain(url: string, hold: Hold): Promise<Message[]> {
     const messages: Message[] = [];
+    let rounds = 0;
     for (;;) {
+      if (rounds === MAX_DRAIN_ROUNDS) {
+        throw new Error(
+          `SQS queue did not drain after ${MAX_DRAIN_ROUNDS} receive rounds; the queue may hold too many messages`,
+        );
+      }
+      rounds += 1;
       const reply = await client.send(
         new ReceiveMessageCommand({
           QueueUrl: url,
@@ -171,32 +197,35 @@ export function createSqsDriver({ client, queueNamePrefix }: SqsDriverOptions): 
       );
       const batch = reply.Messages ?? [];
       if (batch.length === 0) return messages;
+      for (const message of batch) hold.add(message);
       messages.push(...batch);
     }
   }
 
   // Drains the queue, removes superseded copies, and returns the current copy of every message. Every returned copy is
   // hidden until the caller restores, deletes, or replaces it.
-  async function scan(url: string): Promise<Copy[]> {
-    const { current, superseded } = splitCopies((await drain(url)).map(parseCopy));
+  async function scan(url: string, hold: Hold): Promise<Copy[]> {
+    const { current, superseded } = splitCopies((await drain(url, hold)).map(parseCopy));
     for (const copy of superseded) {
-      await remove(url, copy.message);
+      await remove(url, copy.message, hold);
     }
     return current;
   }
 
   // Returns false when SQS rejects the receipt as stale: this call did not remove the copy.
-  async function remove(url: string, message: Message): Promise<boolean> {
+  async function remove(url: string, message: Message, hold: Hold): Promise<boolean> {
     try {
       await client.send(new DeleteMessageCommand({ QueueUrl: url, ReceiptHandle: message.ReceiptHandle }));
-      return true;
     } catch (error) {
       if (!isStaleReceipt(error)) throw error;
+      hold.delete(message);
       return false;
     }
+    hold.delete(message);
+    return true;
   }
 
-  async function restore(url: string, message: Message): Promise<void> {
+  async function restore(url: string, message: Message, hold: Hold): Promise<void> {
     try {
       await client.send(
         new ChangeMessageVisibilityCommand({
@@ -208,19 +237,27 @@ export function createSqsDriver({ client, queueNamePrefix }: SqsDriverOptions): 
     } catch (error) {
       if (!isStaleReceipt(error)) throw error;
     }
+    hold.delete(message);
   }
 
-  // SQS cannot change a body. The replacement is sent first, so a failure leaves the old copy rather than nothing.
-  async function rewrite(url: string, copy: Copy, next: StoredMessage): Promise<void> {
+  // SQS cannot change a body. The replacement is sent first, so a failure leaves the old copy rather than nothing. If
+  // the old copy cannot be removed, the call restores it and a later scan removes it as superseded.
+  async function rewrite(url: string, copy: Copy, next: StoredMessage, hold: Hold): Promise<void> {
     await client.send(new SendMessageCommand({ QueueUrl: url, MessageBody: envelope(next) }));
-    await remove(url, copy.message);
+    await remove(url, copy.message, hold);
   }
 
   // Finds the live copy whose token matches. Other copies are made visible again, so nothing stays hidden.
-  async function holder(url: string, copies: Copy[], token: string, now: number): Promise<Copy | undefined> {
+  async function holder(
+    url: string,
+    copies: Copy[],
+    token: string,
+    now: number,
+    hold: Hold,
+  ): Promise<Copy | undefined> {
     const target = copies.find((copy) => copy.stored.token === token && isLive(copy.stored, now));
     for (const copy of copies) {
-      if (copy !== target) await restore(url, copy.message);
+      if (copy !== target) await restore(url, copy.message, hold);
     }
     return target;
   }
@@ -248,12 +285,11 @@ export function createSqsDriver({ client, queueNamePrefix }: SqsDriverOptions): 
     },
 
     reserve(name, now, leaseUntil) {
-      return serial(name, async () => {
-        const url = await queueUrl(name);
-        const copies = await scan(url);
+      return run(name, async (url, hold) => {
+        const copies = await scan(url, hold);
         const [winner] = copies.filter((copy) => isDue(copy.stored, now)).sort(byDueThenSequence);
         for (const copy of copies) {
-          if (copy !== winner) await restore(url, copy.message);
+          if (copy !== winner) await restore(url, copy.message, hold);
         }
         if (winner === undefined) return null;
         const token = randomUUID();
@@ -265,7 +301,7 @@ export function createSqsDriver({ client, queueNamePrefix }: SqsDriverOptions): 
           token,
           version: winner.stored.version + 1,
         };
-        await rewrite(url, winner, next);
+        await rewrite(url, winner, next, hold);
         return {
           id: next.id,
           payload: Buffer.from(next.payload, "base64").toString("utf8"),
@@ -276,20 +312,18 @@ export function createSqsDriver({ client, queueNamePrefix }: SqsDriverOptions): 
     },
 
     delete(name, token, now) {
-      return serial(name, async () => {
-        const url = await queueUrl(name);
-        const copies = await scan(url);
-        const target = await holder(url, copies, token, now);
+      return run(name, async (url, hold) => {
+        const copies = await scan(url, hold);
+        const target = await holder(url, copies, token, now, hold);
         if (target === undefined) return false;
-        return remove(url, target.message);
+        return remove(url, target.message, hold);
       });
     },
 
     release(name, token, availableAt, now) {
-      return serial(name, async () => {
-        const url = await queueUrl(name);
-        const copies = await scan(url);
-        const target = await holder(url, copies, token, now);
+      return run(name, async (url, hold) => {
+        const copies = await scan(url, hold);
+        const target = await holder(url, copies, token, now, hold);
         if (target === undefined) return false;
         const next: StoredMessage = {
           ...target.stored,
@@ -298,15 +332,14 @@ export function createSqsDriver({ client, queueNamePrefix }: SqsDriverOptions): 
           token: null,
           version: target.stored.version + 1,
         };
-        await rewrite(url, target, next);
+        await rewrite(url, target, next, hold);
         return true;
       });
     },
 
     size(name, now) {
-      return serial(name, async () => {
-        const url = await queueUrl(name);
-        const copies = await scan(url);
+      return run(name, async (url, hold) => {
+        const copies = await scan(url, hold);
         const size: QueueSize = { ready: 0, delayed: 0, reserved: 0 };
         for (const { stored } of copies) {
           if (isLive(stored, now)) size.reserved += 1;
@@ -314,7 +347,7 @@ export function createSqsDriver({ client, queueNamePrefix }: SqsDriverOptions): 
           else size.delayed += 1;
         }
         for (const copy of copies) {
-          await restore(url, copy.message);
+          await restore(url, copy.message, hold);
         }
         return size;
       });
