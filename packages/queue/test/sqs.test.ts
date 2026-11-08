@@ -322,6 +322,18 @@ describe("sqs driver backend faults", () => {
     await expect(driver.reserve("jobs", 500, 2_000)).resolves.toBeNull();
   });
 
+  it("reports delete as false when SQS rejects the receipt as stale, because the message was not removed", async () => {
+    const prefix = freshPrefix();
+    const seeded = createSqsDriver({ client: connect(), queueNamePrefix: prefix });
+    await seeded.push("jobs", "body", { availableAt: 0, now: 0 });
+    const lease = await seeded.reserve("jobs", 0, 1_000);
+    if (lease === null) throw new Error("expected a lease");
+    const { client, arm } = injectable();
+    const driver = createSqsDriver({ client, queueNamePrefix: prefix });
+    arm(DeleteMessageCommand, staleReceipt());
+    await expect(driver.delete("jobs", lease.token, 0)).resolves.toBe(false);
+  });
+
   it("reads a receive reply without a Messages field as an empty batch", async () => {
     // SQS omits Messages when nothing is visible; ElasticMQ returns an empty list, so this stubs the omitted form.
     const client = connect();
