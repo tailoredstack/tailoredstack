@@ -1,6 +1,6 @@
 # @tailoredstack/cache
 
-One typed cache API over pluggable stores: memory, SQLite, and Redis/Valkey. TanStack-style array keys, fluent scoping, prefix invalidation, stale-while-revalidate, and locks.
+One typed cache API over pluggable stores: memory, SQLite, and Redis/Valkey. String keys by default, with array keys for nested keys, fluent scoping, prefix invalidation, stale-while-revalidate, and locks.
 
 The backend is an injected object (the same idea as Kysely's dialects). The core imports no driver, so you pay only for what you use.
 
@@ -19,17 +19,17 @@ import { Cache, MemoryStore } from "@tailoredstack/cache";
 
 const cache = new Cache(new MemoryStore());
 
-await cache.set(["user", 1], { name: "Ada" }, { ttl: 60_000 }); // ms; omit ttl = no expiry
-await cache.get<User>(["user", 1]); // User | undefined
-await cache.getOrSet(["user", 2], () => loadUser(2), { ttl: 60_000 });
-await cache.delete(["user", 1]);
+await cache.set("user:1", { name: "Ada" }, { ttl: 60_000 }); // ms; omit ttl = no expiry
+await cache.get<User>("user:1"); // User | undefined
+await cache.getOrSet("user:2", () => loadUser(2), { ttl: 60_000 });
+await cache.delete("user:1"); // true if removed
 ```
 
-A string key is the same as a one-segment array: `cache.get("config")` equals `cache.get(["config"])`.
+A string key is the same as a one-segment array: `cache.get("config")` equals `cache.get(["config"])`. Use an array key only when a key has parts you want to scope or invalidate together.
 
 ## Keys
 
-Keys are arrays of segments: strings, finite numbers, booleans, `null`, arrays, and plain objects. Object key order does not matter.
+Keys are strings. An array key (strings, finite numbers, booleans, `null`, arrays, and plain objects) is optional, for nested keys such as `["user", 1, "posts"]`. Object key order does not matter.
 
 Invalid segments throw `TypeError`: `undefined`, `NaN`, `Infinity`, functions, bigints.
 
@@ -62,14 +62,26 @@ Predicate invalidation (`{ predicate }`) is a full scan of the store, O(N). Use 
 
 `invalidate([])` is `clear()`: it removes every key in this scope.
 
+## Optional: grouped invalidation (no tags)
+
+The cache has no tags API. The `tags` option, `Cache.tags()`, `Cache.flush()`, and `TaggableStore` were removed (see `CHANGELOG.md`). Read this section only if you want to invalidate a group of related entries together.
+
+Put the shared segment first in an array key, then invalidate that segment:
+
+```ts
+await cache.set(["post", 7, "comments"], comments);
+await cache.set(["post", 7, "likes"], 12);
+await cache.invalidate(["post", 7]); // removes both
+```
+
 ## Typed accessors
 
 ```ts
-await cache.string(["name"], "anon");
-await cache.integer(["visits"], 0);
-await cache.float(["ratio"]);
-await cache.boolean(["flag"], false);
-await cache.array(["ids"], []);
+await cache.string("name", "anon");
+await cache.integer("visits", 0);
+await cache.float("ratio");
+await cache.boolean("flag", false);
+await cache.array("ids", []);
 ```
 
 Each returns the fallback when the stored value has the wrong type.
@@ -77,21 +89,21 @@ Each returns the fallback when the stored value has the wrong type.
 ## Bulk, counters, and presence
 
 ```ts
-await cache.many([["a"], ["b"]]); // [value | undefined, ...]
+await cache.many(["a", "b"]); // [value | undefined, ...]
 await cache.putMany(
   [
-    [["a"], 1],
-    [["b"], 2],
+    ["a", 1],
+    ["b", 2],
   ],
   { ttl: 60_000 },
 );
-await cache.deleteMultiple([["a"], ["b"]]); // number removed
-await cache.add(["once"], value, { ttl: 1000 }); // true only if absent
-await cache.touch(["once"], 5000); // extend ttl; false if missing
-await cache.increment(["hits"], 1);
-await cache.decrement(["hits"], 1);
-await cache.has(["x"]);
-await cache.missing(["x"]);
+await cache.deleteMultiple(["a", "b"]);
+await cache.add("once", value, { ttl: 1000 }); // true only if absent
+await cache.touch("once", 5000); // extend ttl; false if missing
+await cache.increment("hits", 1);
+await cache.decrement("hits", 1);
+await cache.has("x");
+await cache.missing("x");
 ```
 
 `set` rejects `undefined`: use `delete()` or store `null`.
@@ -99,7 +111,7 @@ await cache.missing(["x"]);
 ## `getOrSet` with a TTL function
 
 ```ts
-await cache.getOrSet(["report"], buildReport, { ttl: (r) => (r.isFinal ? 86_400_000 : 60_000) });
+await cache.getOrSet("report", buildReport, { ttl: (r) => (r.isFinal ? 86_400_000 : 60_000) });
 ```
 
 ## Stale-while-revalidate: `flexible`
