@@ -1,3 +1,5 @@
 node_modules/
 .agents/skills
 .DS_Store
+coverage
+dist
