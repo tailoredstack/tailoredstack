@@ -28,7 +28,7 @@ function tempPath(): string {
 // Two driver instances on one file: the shared-backend contract (B7) needs a peer.
 driverContract({
   name: "sqlite",
-  capabilities: { shared: true, exactCounts: true, maxPushDelayMs: 43_200_000 },
+  capabilities: { shared: true, exactCounts: true, maxPushDelayMs: Number.POSITIVE_INFINITY },
   fixture: async () => {
     const path = tempPath();
     return { driver: createSqliteDriver({ path }), peer: createSqliteDriver({ path }) };
