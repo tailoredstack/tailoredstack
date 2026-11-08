@@ -507,7 +507,8 @@ describe("sqs driver backend faults", () => {
     } as unknown as SQSClient;
     const driver = createSqsDriver({ client, queueNamePrefix: freshPrefix() });
     await expect(driver.reserve("jobs", 0, 1_000)).rejects.toThrow("did not drain");
-    expect(receives).toBe(MAX_DRAIN_ROUNDS);
+    // The cap throws when batch MAX_DRAIN_ROUNDS + 1 arrives, so that batch is counted and restored too.
+    expect(receives).toBe(MAX_DRAIN_ROUNDS + 1);
     expect(restored).toEqual(drained);
   });
 });
