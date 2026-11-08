@@ -24,7 +24,9 @@ export const REDIS_CAPABILITIES: DriverCapabilities = {
 // Returns the message member when the token names a live lease (the name matches and leaseUntil > now), else nil.
 const CURRENT_LEASE = `
 local function current(name, token, now)
-  local member = string.format('%016d', tonumber(string.match(token, '^(%d+):')))
+  local seq = string.match(token, '^(%d+):')
+  if seq == nil then return nil end
+  local member = string.format('%016d', tonumber(seq))
   local key = 'queue:msg:' .. member
   if redis.call('HGET', key, 'name') ~= name or redis.call('HGET', key, 'token') ~= token
     or tonumber(redis.call('HGET', key, 'leaseUntil')) <= tonumber(now) then
