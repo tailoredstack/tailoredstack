@@ -9,7 +9,7 @@ export interface SqliteDriverOptions {
 export const SQLITE_CAPABILITIES: DriverCapabilities = {
   shared: true,
   exactCounts: true,
-  maxPushDelayMs: 43_200_000,
+  maxPushDelayMs: Number.POSITIVE_INFINITY,
 };
 
 type ReadyRow = { seq: number; payload: string; attempts: number };
