@@ -18,6 +18,7 @@ import {
 } from "./actors.ts";
 
 const HUNDRED_YEARS = 100 * 365 * 24 * 3_600_000;
+const OTHER_NAME = "other-jobs";
 
 export interface DriverFixture {
   readonly driver: Driver;
@@ -321,6 +322,18 @@ export function driverContract(options: DriverContractOptions): void {
         expect(await driver.delete(NAME, "garbage", T0)).toBe(false);
         expect(await reserved.delete(T0)).toBe(true);
       });
+
+      it("D9: a valid token under a different queue name deletes as false, and the lease is untouched", async () => {
+        const { driver } = await options.fixture();
+        const queue = createQueue(driver);
+        opened.push(queue);
+        await queue.push(NAME, "d9", at(T0));
+        const reserved = await mustReserve(queue, T0, T0 + SECOND);
+        const token = `${reserved.id}:${reserved.attempts}`;
+        expect(await driver.delete(OTHER_NAME, token, T0)).toBe(false);
+        await expectSize(queue, exactCounts, { ready: 0, delayed: 0, reserved: 1 }, T0);
+        expect(await reserved.delete(T0)).toBe(true);
+      });
     });
 
     describe("release", () => {
@@ -420,6 +433,20 @@ export function driverContract(options: DriverContractOptions): void {
         const reserved = await mustReserve(queue, T0, T0 + SECOND);
         expect(await driver.release(NAME, "garbage", T0, T0)).toBe(false);
         expect(await reserved.release(T0, T0)).toBe(true);
+      });
+
+      it("L10: a valid token under a different queue name releases as false, and the lease is untouched", async () => {
+        const { driver } = await options.fixture();
+        const queue = createQueue(driver);
+        opened.push(queue);
+        await queue.push(NAME, "l10", at(T0));
+        const reserved = await mustReserve(queue, T0, T0 + SECOND);
+        const token = `${reserved.id}:${reserved.attempts}`;
+        expect(await driver.release(OTHER_NAME, token, T0, T0)).toBe(false);
+        await expectSize(queue, exactCounts, { ready: 0, delayed: 0, reserved: 1 }, T0);
+        expect(await reserved.release(T0, T0)).toBe(true);
+        const again = await mustReserve(queue, T0, T0 + SECOND);
+        expect(again.attempts).toBe(2);
       });
     });
     describe("size", () => {
