@@ -208,6 +208,27 @@ describe("Worker", () => {
     expect(mailed).toEqual(["smtp"]);
   });
 
+  it("does not let a context __proto__ key change the job's ctx prototype", async () => {
+    const seenCtx: Array<Record<string, unknown>> = [];
+    class Probe extends Job<MailPayload, Record<string, unknown>> {
+      declare readonly __jobKey: "Probe";
+
+      async handle(ctx: JobContext<Record<string, unknown>>): Promise<void> {
+        seenCtx.push(ctx);
+      }
+    }
+    const registry = { Probe };
+    const dialect = new MemoryDialect();
+    const queue = new Queue(dialect, { jobs: registry, now: () => 1_000 });
+    const hostile = JSON.parse('{"__proto__": {"polluted": true}}') as Record<string, unknown>;
+    const worker = new Worker({ dialect, jobs: registry, context: hostile, now: () => 1_000 });
+    await queue.enqueue(new Probe({ to: "a" }));
+
+    await worker.processOne();
+    expect(seenCtx[0]?.polluted).toBeUndefined();
+    expect(Object.getPrototypeOf(seenCtx[0] ?? {})).toBeNull();
+  });
+
   it("throws at construction when one class is registered under two keys", () => {
     const dialect = new MemoryDialect();
     const dup = { SendMail, Alias: SendMail } as unknown as JobRegistry;
