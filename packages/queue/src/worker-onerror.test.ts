@@ -253,6 +253,36 @@ describe("Worker onError routing for dialect errors", () => {
     expect(onError).not.toHaveBeenCalled();
   });
 
+  it("processOne does not call onError directly for a failure-path release rejection; it rejects with the handle error", async () => {
+    const onError = vi.fn();
+    const h = setup({ onError });
+    failing.add("a");
+    await h.queue.enqueue(new Mail({ to: "a" }));
+    vi.spyOn(h.dialect, "release").mockRejectedValueOnce(releaseDown);
+
+    await expect(h.worker.processOne()).rejects.toBe(boom);
+    expect(onError).not.toHaveBeenCalled();
+  });
+
+  it("run() reports a failure-path release rejection to onError and keeps looping", async () => {
+    const onError = vi.fn();
+    const h = setup({ onError });
+    failing.add("a");
+    onSleep = () => {
+      h.worker.stop();
+      return Promise.resolve();
+    };
+    await h.queue.enqueue(new Mail({ to: "a" }));
+    await h.queue.enqueue(new Mail({ to: "b" }));
+    vi.spyOn(h.dialect, "release").mockRejectedValueOnce(releaseDown);
+
+    await expect(h.worker.run()).resolves.toBeUndefined();
+
+    expect(onError).toHaveBeenCalledTimes(1);
+    expect(onError.mock.calls[0]?.[0]).toBe(releaseDown);
+    expect(log).toEqual(["run:a", "run:b", "sleep"]);
+  });
+
   it("typed onError: a non-function fails to compile (checked by tsc via @ts-expect-error)", () => {
     expect(typeChecks).toBeTypeOf("function");
   });
