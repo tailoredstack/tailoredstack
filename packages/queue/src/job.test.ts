@@ -1,5 +1,5 @@
 import { describe, expect, expectTypeOf, it } from "vitest";
-import { Job } from "./job.js";
+import { Job } from "./job.ts";
 
 interface SendEmailPayload {
   readonly to: string;

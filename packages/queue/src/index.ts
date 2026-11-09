@@ -6,3 +6,4 @@ export type {
   QueueCount,
   Receipt,
 } from "./dialect.ts";
+export { Job } from "./job.ts";
