@@ -276,6 +276,71 @@ describe("Worker run loop", () => {
     }
   });
 
+  it("a clock throw after a job still waits before the next dequeue", async () => {
+    const dialect = new MemoryDialect();
+    let calls = 0;
+    // Call 1: first processOne dequeue time. Call 2: ack time, so the job succeeds.
+    // Call 3: second processOne dequeue time, which throws. The flag was left true by the first job.
+    const now = (): number => {
+      calls += 1;
+      if (calls === 3) throw new Error("clock down");
+      return 1_000;
+    };
+    await dialect.enqueue("default", JSON.stringify({ job: "Mail", payload: { to: "a" } }), { availableAt: 0, now: 0 });
+    const order: string[] = [];
+    let dequeues = 0;
+    const realDequeue = dialect.dequeue.bind(dialect);
+    vi.spyOn(dialect, "dequeue").mockImplementation(async (name, at) => {
+      dequeues += 1;
+      order.push("dequeue");
+      if (dequeues === 2) {
+        worker.stop();
+        return null;
+      }
+      return realDequeue(name, at);
+    });
+    const worker: Worker<typeof jobs> = new Worker({
+      dialect,
+      jobs,
+      context,
+      now,
+      sleep: () => {
+        order.push("sleep");
+        return Promise.resolve();
+      },
+    });
+
+    await expect(worker.run()).resolves.toBeUndefined();
+
+    // Dequeue 1 runs the job. The clock throws before dequeue 2 reaches the dialect, so the loop must sleep before dequeue 2.
+    expect(order).toEqual(["dequeue", "sleep", "dequeue"]);
+  });
+
+  it("stop() during dequeue skips the idle wait on the default timer path", async () => {
+    vi.useFakeTimers();
+    try {
+      const dialect = new MemoryDialect();
+      let worker: Worker<typeof jobs> | undefined;
+      vi.spyOn(dialect, "dequeue").mockImplementation(async () => {
+        worker?.stop();
+        return null;
+      });
+      worker = new Worker({ dialect, jobs, context, now: () => 1_000, pollInterval: 5_000 });
+
+      let settled = false;
+      const done = worker.run().then(() => {
+        settled = true;
+      });
+      await vi.advanceTimersByTimeAsync(0);
+
+      expect(settled).toBe(true);
+      expect(vi.getTimerCount()).toBe(0);
+      await done;
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("stop() called twice does not throw", async () => {
     const h = setup();
     expect(() => {
