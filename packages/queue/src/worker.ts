@@ -157,6 +157,7 @@ export class Worker<R extends JobRegistry> {
     try {
       while (!this.stopRequested) {
         let ran: boolean;
+        this.dequeued = false;
         try {
           ran = await this.processOne();
         } catch {
