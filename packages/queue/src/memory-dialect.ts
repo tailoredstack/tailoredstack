@@ -5,11 +5,13 @@ interface StoredMessage {
   readonly name: string;
   readonly payload: string;
   readonly availableAt: number;
+  leaseUntil: number;
+  attempts: number;
 }
 
 /**
  * In-process `Dialect`. Never reads a clock: every time is the caller's `now`.
- * Only `enqueue` and `count` are implemented; the other methods are pending work.
+ * `acknowledge`, `release`, and `close` are pending work.
  */
 export class MemoryDialect implements Dialect {
   readonly capabilities: DialectCapabilities = {
@@ -22,16 +24,38 @@ export class MemoryDialect implements Dialect {
 
   private readonly messages: StoredMessage[] = [];
   private sequence = 0;
+  private receiptSequence = 0;
 
   async enqueue(name: string, payload: string, at: { availableAt: number; now: number }): Promise<string> {
     this.sequence += 1;
     const id = `memory-${this.sequence}`;
-    this.messages.push({ id, name, payload, availableAt: at.availableAt });
+    this.messages.push({
+      id,
+      name,
+      payload,
+      availableAt: at.availableAt,
+      leaseUntil: Number.NEGATIVE_INFINITY,
+      attempts: 0,
+    });
     return id;
   }
 
-  async dequeue(_name: string, _at: { now: number; leaseUntil: number }): Promise<Message | null> {
-    throw new Error("not implemented");
+  async dequeue(name: string, at: { now: number; leaseUntil: number }): Promise<Message | null> {
+    // Ready: due and not under a live lease (live means now < leaseUntil). Earliest-due wins;
+    // the stable sort keeps push order for ties.
+    const [next] = this.messages
+      .filter((m) => m.name === name && m.availableAt <= at.now && m.leaseUntil <= at.now)
+      .sort((a, b) => a.availableAt - b.availableAt);
+    if (!next) return null;
+    next.leaseUntil = at.leaseUntil;
+    next.attempts += 1;
+    this.receiptSequence += 1;
+    return {
+      id: next.id,
+      payload: next.payload,
+      attempts: next.attempts,
+      receipt: `${next.id}:${this.receiptSequence}` as Receipt,
+    };
   }
 
   async acknowledge(_name: string, _receipt: Receipt, _now: number): Promise<boolean> {
