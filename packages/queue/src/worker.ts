@@ -104,9 +104,9 @@ export class Worker<R extends JobRegistry> {
       await instance.handle(ctx);
     } catch (error) {
       // The original handle error always propagates. A stale receipt (false) is ignored as before.
-      // A dialect rejection during bookkeeping is discarded so it cannot replace the handle error.
-      const failedAt = this.now();
+      // Any rejection during bookkeeping, including the injected clock, is discarded so it cannot replace the handle error.
       try {
+        const failedAt = this.now();
         if (message.attempts < this.tries) {
           await this.dialect.release(this.name, message.receipt, {
             availableAt: failedAt + this.backoffDelay(message.attempts),
