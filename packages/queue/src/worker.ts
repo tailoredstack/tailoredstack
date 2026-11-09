@@ -99,26 +99,27 @@ export class Worker<R extends JobRegistry> {
 
   /**
    * Dequeues and runs one job. Resolves `false` when nothing is ready. Acknowledges on success.
-   * On handle failure: releases with capped exponential backoff while attempts < tries, else acknowledges
-   * (drops). Always rethrows the original handle error.
+   * On any failure after dequeue (envelope, unknown key, or handle): releases with capped exponential backoff
+   * while attempts < tries, else acknowledges (drops). Always rethrows the original error.
    */
   async processOne(): Promise<boolean> {
     const now = this.now();
     const message = await this.dialect.dequeue(this.name, { now, leaseUntil: now + this.lease });
     if (message === null) return false;
 
-    const { job, payload } = parseEnvelope(message.payload);
-    const Cls = this.lookup(job);
-    const instance = new Cls(payload);
-
-    const controller = new AbortController();
-    const ctx = Object.assign(Object.create(null), this.context, { signal: controller.signal }) as JobContext<
-      RegistryContext<R>
-    >;
     try {
+      // Envelope and lookup failures take the same retry path as handle failures (TS-78 release or ack).
+      const { job, payload } = parseEnvelope(message.payload);
+      const Cls = this.lookup(job);
+      const instance = new Cls(payload);
+
+      const controller = new AbortController();
+      const ctx = Object.assign(Object.create(null), this.context, { signal: controller.signal }) as JobContext<
+        RegistryContext<R>
+      >;
       await instance.handle(ctx);
     } catch (error) {
-      // The original handle error always propagates. A stale receipt (false) is ignored as before.
+      // The original error always propagates. A stale receipt (false) is ignored as before.
       // Any rejection during bookkeeping, including the injected clock, is discarded so it cannot replace the handle error.
       try {
         const failedAt = this.now();
