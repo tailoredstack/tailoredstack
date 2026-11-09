@@ -148,6 +148,28 @@ describe("Worker", () => {
     expect(spy).toHaveBeenCalledWith("default", { now: 5_000, leaseUntil: 35_000 });
   });
 
+  it("rejects a non-string job key without acknowledging", async () => {
+    const dialect = new MemoryDialect();
+    const worker = new Worker({ dialect, jobs, context, now: () => 1_000 });
+    await rawEnqueue(dialect, JSON.stringify({ job: 42, payload: {} }));
+
+    await expect(worker.processOne()).rejects.toThrow(/job must be a string/);
+    await expect(dialect.count("default", 1_000)).resolves.toEqual({ ready: 0, delayed: 0, reserved: 1 });
+  });
+
+  it("falls back to Date.now when no clock is injected", async () => {
+    const dialect = new MemoryDialect();
+    const dequeue = vi.spyOn(dialect, "dequeue");
+    const queue = new Queue(dialect, { jobs });
+    const worker = new Worker({ dialect, jobs, context });
+    await queue.enqueue(new SendMail({ to: "a" }));
+
+    vi.spyOn(Date, "now").mockReturnValue(9_000);
+    await worker.processOne();
+    vi.restoreAllMocks();
+    expect(dequeue).toHaveBeenCalledWith("default", { now: 9_000, leaseUntil: 39_000 });
+  });
+
   it("uses the injected now for dequeue and acknowledge", async () => {
     const dialect = new MemoryDialect();
     const dequeue = vi.spyOn(dialect, "dequeue");

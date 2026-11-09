@@ -14,7 +14,7 @@ import type { Job } from "./job.ts";
  * The compile-time brand already rejects `{ Alias: SendMail }` under a different key; the
  * constructor's duplicate-class check is the runtime second layer for the same mistake.
  */
-type JobClass = abstract new (payload: never) => Job<unknown> & { readonly __jobKey: string };
+type JobClass = abstract new (payload: never) => Job<unknown, unknown> & { readonly __jobKey: string };
 
 /** Registry: wire key to job class. */
 export type JobRegistry = { readonly [key: string]: JobClass };
