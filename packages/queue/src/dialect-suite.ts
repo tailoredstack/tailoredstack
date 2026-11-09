@@ -9,6 +9,12 @@ export function exactCountsSkipTitle(title: string, name: string): string {
   return `${title} [skipped: ${name} declares capabilities.exactCounts=false]`;
 }
 
+/** Narrows a value that the test has just set up; throws a named error if it is missing. */
+function must<T>(value: T | null | undefined, what: string): T {
+  if (value == null) throw new Error(`dialect suite: expected ${what} to be present`);
+  return value;
+}
+
 /**
  * Shared contract cases for `Dialect` implementations. Each case builds a fresh
  * dialect via `create`, so cases never share state. Cases that depend on exact
@@ -119,7 +125,7 @@ export function runDialectSuite(name: string, create: () => Dialect): void {
       const d = create();
       await d.enqueue("jobs", "a", { availableAt: 1000, now: 1000 });
       const msg = await d.dequeue("jobs", { now: 1000, leaseUntil: 2000 });
-      expect(await d.acknowledge("jobs", msg!.receipt, 1500)).toBe(true);
+      expect(await d.acknowledge("jobs", must(msg, "msg").receipt, 1500)).toBe(true);
       expect(await d.dequeue("jobs", { now: 9000, leaseUntil: 10000 })).toBeNull();
     });
 
@@ -127,29 +133,29 @@ export function runDialectSuite(name: string, create: () => Dialect): void {
       const d = create();
       await d.enqueue("jobs", "a", { availableAt: 1000, now: 1000 });
       const msg = await d.dequeue("jobs", { now: 1000, leaseUntil: 2000 });
-      expect(await d.acknowledge("jobs", msg!.receipt, 1500)).toBe(true);
-      expect(await d.acknowledge("jobs", msg!.receipt, 1500)).toBe(false);
+      expect(await d.acknowledge("jobs", must(msg, "msg").receipt, 1500)).toBe(true);
+      expect(await d.acknowledge("jobs", must(msg, "msg").receipt, 1500)).toBe(false);
     });
 
     it("acknowledge after lease expiry returns false and does not throw", async () => {
       const d = create();
       await d.enqueue("jobs", "a", { availableAt: 1000, now: 1000 });
       const msg = await d.dequeue("jobs", { now: 1000, leaseUntil: 2000 });
-      await expect(d.acknowledge("jobs", msg!.receipt, 2000)).resolves.toBe(false);
+      await expect(d.acknowledge("jobs", must(msg, "msg").receipt, 2000)).resolves.toBe(false);
     });
 
     it("release after lease expiry returns false and does not throw", async () => {
       const d = create();
       await d.enqueue("jobs", "a", { availableAt: 1000, now: 1000 });
       const msg = await d.dequeue("jobs", { now: 1000, leaseUntil: 2000 });
-      await expect(d.release("jobs", msg!.receipt, { availableAt: 2500, now: 2000 })).resolves.toBe(false);
+      await expect(d.release("jobs", must(msg, "msg").receipt, { availableAt: 2500, now: 2000 })).resolves.toBe(false);
     });
 
     it("release with a delay hides the message until that time", async () => {
       const d = create();
       await d.enqueue("jobs", "a", { availableAt: 1000, now: 1000 });
       const msg = await d.dequeue("jobs", { now: 1000, leaseUntil: 2000 });
-      expect(await d.release("jobs", msg!.receipt, { availableAt: 5000, now: 1500 })).toBe(true);
+      expect(await d.release("jobs", must(msg, "msg").receipt, { availableAt: 5000, now: 1500 })).toBe(true);
       expect(await d.dequeue("jobs", { now: 4999, leaseUntil: 6000 })).toBeNull();
       expect((await d.dequeue("jobs", { now: 5000, leaseUntil: 6000 }))?.payload).toBe("a");
     });
@@ -160,9 +166,9 @@ export function runDialectSuite(name: string, create: () => Dialect): void {
       const first = await d.dequeue("jobs", { now: 1000, leaseUntil: 2000 });
       const second = await d.dequeue("jobs", { now: 2000, leaseUntil: 3000 });
       expect(first?.receipt).not.toBe(second?.receipt);
-      expect(await d.acknowledge("jobs", first!.receipt, 2500)).toBe(false);
-      expect(await d.release("jobs", first!.receipt, { availableAt: 2600, now: 2500 })).toBe(false);
-      expect(await d.acknowledge("jobs", second!.receipt, 2500)).toBe(true);
+      expect(await d.acknowledge("jobs", must(first, "first delivery").receipt, 2500)).toBe(false);
+      expect(await d.release("jobs", must(first, "first delivery").receipt, { availableAt: 2600, now: 2500 })).toBe(false);
+      expect(await d.acknowledge("jobs", must(second, "second delivery").receipt, 2500)).toBe(true);
     });
 
     exact("count ignores messages enqueued under another name", async () => {
