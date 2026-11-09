@@ -239,6 +239,8 @@ describe("Worker run loop", () => {
   });
 
   it("a dequeue error waits pollInterval before the next dequeue", async () => {
+    // The default onError reports the dequeue error with console.error; silence it and restore it at the end.
+    const consoleError = vi.spyOn(console, "error").mockImplementation(() => {});
     const h = setup({ pollInterval: 700 });
     const order: string[] = [];
     let calls = 0;
@@ -259,6 +261,8 @@ describe("Worker run loop", () => {
     // The third dequeue calls stop(), so its idle wait is skipped (stop already requested).
     expect(order).toEqual(["dequeue", "sleep", "dequeue", "sleep", "dequeue"]);
     expect(h.sleeps).toEqual([700, 700]);
+    expect(consoleError).toHaveBeenCalledTimes(1);
+    consoleError.mockRestore();
   });
 
   it("stop() clears the idle timer it woke", async () => {
