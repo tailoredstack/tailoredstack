@@ -186,6 +186,24 @@ describe("Worker retry", () => {
     await expect(worker.processOne()).rejects.toBe(boom);
   });
 
+  it("keeps the handle error when release rejects during a retry", async () => {
+    failuresLeft = Number.POSITIVE_INFINITY;
+    const h = await setup();
+    vi.spyOn(h.dialect, "release").mockRejectedValue(new Error("db down"));
+    const worker = workerFor(h);
+
+    await expect(worker.processOne()).rejects.toBe(boom);
+  });
+
+  it("keeps the handle error when acknowledge rejects on the final attempt", async () => {
+    failuresLeft = Number.POSITIVE_INFINITY;
+    const h = await setup();
+    vi.spyOn(h.dialect, "acknowledge").mockRejectedValue(new Error("ack down"));
+    const worker = workerFor(h, { tries: 1 });
+
+    await expect(worker.processOne()).rejects.toBe(boom);
+  });
+
   it("uses the dialect-reported attempts count for backoff", async () => {
     failuresLeft = Number.POSITIVE_INFINITY;
     const h = await setup();
