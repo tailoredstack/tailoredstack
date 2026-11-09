@@ -35,7 +35,7 @@ export interface WorkerOptions<R extends JobRegistry> {
   readonly pollInterval?: number;
   /** Injected idle sleep. Defaults to a `setTimeout`-based sleep. */
   readonly sleep?: (ms: number) => Promise<void>;
-  /** Receives dialect errors (dequeue, release, acknowledge rejections). Handle errors are not reported here. Defaults to a no-op. */
+  /** Receives dialect errors (dequeue, release, acknowledge rejections). Handle errors are not reported here. Defaults to `console.error`, and the loop keeps running. */
   readonly onError?: (error: unknown) => void;
 }
 
@@ -79,7 +79,7 @@ export class Worker<R extends JobRegistry> {
     this.backoffCap = options.backoffCap ?? DEFAULT_BACKOFF_CAP_MS;
     this.pollInterval = options.pollInterval ?? DEFAULT_POLL_INTERVAL_MS;
     this.injectedSleep = options.sleep;
-    this.onError = options.onError ?? (() => {});
+    this.onError = options.onError ?? defaultOnError;
 
     if (!Number.isInteger(this.tries) || this.tries < 1) {
       throw new Error(`Invalid tries ${this.tries}: must be an integer >= 1`);
@@ -244,6 +244,11 @@ export class Worker<R extends JobRegistry> {
       payload: unknown,
     ) => Job<unknown, RegistryContext<R>>;
   }
+}
+
+/** Default dialect-error sink: report and keep running, as Laravel does for transient queue errors. */
+function defaultOnError(error: unknown): void {
+  console.error("Worker dialect error:", error);
 }
 
 /** Parses `{ job, payload }`. Throws without acknowledging anything when the envelope is malformed. */
