@@ -181,6 +181,7 @@ export class Worker<R extends JobRegistry> {
 
   /** Idle wait that ends early when stop() is called. The default timer is cleared on stop so it does not keep the process alive. */
   private idle(): Promise<void> {
+    if (this.stopRequested) return Promise.resolve();
     if (this.injectedSleep) return Promise.race([this.injectedSleep(this.pollInterval), this.stopped.promise]);
     return new Promise<void>((resolve) => {
       const done = (): void => {

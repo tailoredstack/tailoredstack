@@ -256,8 +256,9 @@ describe("Worker run loop", () => {
 
     await expect(h.worker.run()).resolves.toBeUndefined();
 
-    expect(order).toEqual(["dequeue", "sleep", "dequeue", "sleep", "dequeue", "sleep"]);
-    expect(h.sleeps).toEqual([700, 700, 700]);
+    // The third dequeue calls stop(), so its idle wait is skipped (stop already requested).
+    expect(order).toEqual(["dequeue", "sleep", "dequeue", "sleep", "dequeue"]);
+    expect(h.sleeps).toEqual([700, 700]);
   });
 
   it("stop() clears the idle timer it woke", async () => {
@@ -313,7 +314,8 @@ describe("Worker run loop", () => {
     await expect(worker.run()).resolves.toBeUndefined();
 
     // Dequeue 1 runs the job. The clock throws before dequeue 2 reaches the dialect, so the loop must sleep before dequeue 2.
-    expect(order).toEqual(["dequeue", "sleep", "dequeue", "sleep"]);
+    // The second dequeue calls stop(), so its idle wait is skipped (stop already requested).
+    expect(order).toEqual(["dequeue", "sleep", "dequeue"]);
   });
 
   it("stop() during dequeue skips the idle wait on the default timer path", async () => {
