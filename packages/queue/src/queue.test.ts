@@ -1,3 +1,4 @@
+import { runInNewContext } from "node:vm";
 import { describe, expect, it, vi } from "vitest";
 import type { Dialect, DialectCapabilities } from "./dialect.ts";
 import { Job } from "./job.ts";
@@ -204,6 +205,18 @@ describe("Queue", () => {
       const queue = mailQueue(dialect, () => 0);
       await expect(queue.enqueue(new Copied({ to: "a" }))).rejects.toThrow(/Copied is not registered/);
       expect(enqueue).not.toHaveBeenCalled();
+    });
+
+    it("throws at construction when one class is registered under two keys", () => {
+      const { dialect } = fakeDialect();
+      expect(() => new Queue(dialect, { jobs: { A: SendMail, B: SendMail } as never })).toThrow(/SendMail.*"A".*"B"/);
+    });
+
+    it("accepts a plain object created in another realm", async () => {
+      const { dialect, enqueue } = fakeDialect();
+      const foreign = runInNewContext("({ to: 'a', nested: [1, 2] })") as SendMailPayload;
+      await mailQueue(dialect, () => 0).enqueue(new SendMail(foreign));
+      expect(enqueue).toHaveBeenCalledTimes(1);
     });
 
     it("serializes to the wire format { job: key, payload }", async () => {
