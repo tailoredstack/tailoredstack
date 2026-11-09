@@ -195,6 +195,22 @@ describe("Worker retry", () => {
     await expect(worker.processOne()).rejects.toBe(boom);
   });
 
+  it("keeps the handle error when the clock throws on the failure path", async () => {
+    failuresLeft = Number.POSITIVE_INFINITY;
+    const dialect = new MemoryDialect();
+    const queue = new Queue(dialect, { jobs, now: () => 0 });
+    await queue.enqueue(new Flaky({ to: "a" }));
+    let calls = 0;
+    const now = (): number => {
+      calls += 1;
+      if (calls > 1) throw new Error("clock down");
+      return 0;
+    };
+    const worker = new Worker({ dialect, jobs, context, now, lease: 100 });
+
+    await expect(worker.processOne()).rejects.toBe(boom);
+  });
+
   it("keeps the handle error when acknowledge rejects on the final attempt", async () => {
     failuresLeft = Number.POSITIVE_INFINITY;
     const h = await setup();
