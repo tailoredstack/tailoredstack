@@ -302,6 +302,7 @@ describe("Worker onError routing for dialect errors", () => {
     const onError = vi.fn(() => {
       throw new Error("onError exploded");
     });
+    const consoleError = vi.spyOn(console, "error").mockImplementation(() => {});
     const h = setup({ onError });
     onRun = (to) => {
       if (to === "a") h.worker.stop();
@@ -313,6 +314,46 @@ describe("Worker onError routing for dialect errors", () => {
 
     expect(onError).toHaveBeenCalledTimes(1);
     expect(log).toEqual(["sleep", "run:a"]);
+    expect(consoleError).toHaveBeenCalledTimes(1);
+    expect(consoleError).toHaveBeenCalledWith("Worker onError threw:", expect.objectContaining({ message: "onError exploded" }));
+    consoleError.mockRestore();
+  });
+
+  it("a throwing onError is logged with console.error: the reporter failure text and the thrown error", async () => {
+    const thrown = new Error("onError exploded");
+    const onError = vi.fn(() => {
+      throw thrown;
+    });
+    const consoleError = vi.spyOn(console, "error").mockImplementation(() => {});
+    const h = setup({ onError });
+    onSleep = () => {
+      h.worker.stop();
+      return Promise.resolve();
+    };
+    vi.spyOn(h.dialect, "dequeue").mockRejectedValueOnce(dequeueDown);
+
+    await expect(h.worker.run()).resolves.toBeUndefined();
+
+    expect(consoleError.mock.calls[0]?.[0]).toBe("Worker onError threw:");
+    expect(consoleError.mock.calls[0]?.[1]).toBe(thrown);
+    expect(h.sleeps).toEqual([1_000]);
+    consoleError.mockRestore();
+  });
+
+  it("default onError path: exactly one console.error per dialect error, no double logging", async () => {
+    const consoleError = vi.spyOn(console, "error").mockImplementation(() => {});
+    const h = setup();
+    onSleep = () => {
+      h.worker.stop();
+      return Promise.resolve();
+    };
+    vi.spyOn(h.dialect, "dequeue").mockRejectedValueOnce(dequeueDown);
+
+    await expect(h.worker.run()).resolves.toBeUndefined();
+
+    expect(consoleError).toHaveBeenCalledTimes(1);
+    expect(consoleError.mock.calls[0]?.[1]).toBe(dequeueDown);
+    consoleError.mockRestore();
   });
 
   it("default with no onError: dialect errors are dropped silently and run() does not reject", async () => {
