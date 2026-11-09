@@ -315,7 +315,10 @@ describe("Worker onError routing for dialect errors", () => {
     expect(onError).toHaveBeenCalledTimes(1);
     expect(log).toEqual(["sleep", "run:a"]);
     expect(consoleError).toHaveBeenCalledTimes(1);
-    expect(consoleError).toHaveBeenCalledWith("Worker onError threw:", expect.objectContaining({ message: "onError exploded" }));
+    expect(consoleError).toHaveBeenCalledWith(
+      "Worker onError threw:",
+      expect.objectContaining({ message: "onError exploded" }),
+    );
     consoleError.mockRestore();
   });
 
