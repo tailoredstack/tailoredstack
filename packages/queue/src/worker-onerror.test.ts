@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { Dialect } from "./dialect.ts";
 import type { JobContext } from "./job.ts";
 import { Job } from "./job.ts";
@@ -88,6 +88,65 @@ describe("Worker onError routing for dialect errors", () => {
     failing = new Set<string>();
     onRun = () => {};
     onSleep = () => Promise.resolve();
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it("default onError (omitted): a dequeue rejection is reported with console.error and the idle wait still happens", async () => {
+    const consoleError = vi.spyOn(console, "error").mockImplementation(() => {});
+    const h = setup();
+    const handleSpy = vi.fn();
+    onRun = handleSpy;
+    onSleep = () => {
+      h.worker.stop();
+      return Promise.resolve();
+    };
+    await h.queue.enqueue(new Mail({ to: "a" }));
+    vi.spyOn(h.dialect, "dequeue").mockRejectedValueOnce(dequeueDown);
+
+    await expect(h.worker.run()).resolves.toBeUndefined();
+
+    expect(consoleError).toHaveBeenCalledTimes(1);
+    expect(consoleError.mock.calls[0]?.[1]).toBe(dequeueDown);
+    expect(handleSpy).not.toHaveBeenCalled();
+    expect(h.sleeps).toEqual([1_000]);
+  });
+
+  it("default onError (omitted): a release rejection during a retry is reported with console.error; run() keeps looping and the handle ran once", async () => {
+    const consoleError = vi.spyOn(console, "error").mockImplementation(() => {});
+    const h = setup();
+    const handleSpy = vi.fn();
+    onRun = handleSpy;
+    failing.add("a");
+    onSleep = () => {
+      h.worker.stop();
+      return Promise.resolve();
+    };
+    await h.queue.enqueue(new Mail({ to: "a" }));
+    vi.spyOn(h.dialect, "release").mockRejectedValueOnce(releaseDown);
+
+    await expect(h.worker.run()).resolves.toBeUndefined();
+
+    expect(handleSpy).toHaveBeenCalledTimes(1);
+    expect(consoleError).toHaveBeenCalledTimes(1);
+    expect(consoleError.mock.calls[0]?.[1]).toBe(releaseDown);
+  });
+
+  it("default onError (omitted): a handle error is NOT reported with console.error", async () => {
+    const consoleError = vi.spyOn(console, "error").mockImplementation(() => {});
+    const h = setup();
+    failing.add("a");
+    onSleep = () => {
+      h.worker.stop();
+      return Promise.resolve();
+    };
+    await h.queue.enqueue(new Mail({ to: "a" }));
+
+    await expect(h.worker.run()).resolves.toBeUndefined();
+
+    expect(consoleError).not.toHaveBeenCalled();
   });
 
   it("dequeue rejects: onError gets the exact error, handle is not called, run() resolves, and the idle wait happens", async () => {
