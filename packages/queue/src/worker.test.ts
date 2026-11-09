@@ -1,0 +1,175 @@
+import { describe, expect, it, vi } from "vitest";
+import type { Dialect } from "./dialect.ts";
+import type { JobContext } from "./job.ts";
+import { Job } from "./job.ts";
+import { MemoryDialect } from "./memory-dialect.ts";
+import { Queue } from "./queue.ts";
+import { Worker } from "./worker.ts";
+
+interface MailPayload {
+  readonly to: string;
+}
+
+interface AppContext {
+  readonly tenant: string;
+}
+
+const seen: Array<{ to: string; ctx: JobContext<AppContext> }> = [];
+
+class SendMail extends Job<MailPayload, AppContext> {
+  declare readonly __jobKey: "SendMail";
+
+  async handle(ctx: JobContext<AppContext>): Promise<void> {
+    seen.push({ to: this.payload.to, ctx });
+  }
+}
+
+class Failing extends Job<MailPayload, AppContext> {
+  declare readonly __jobKey: "Failing";
+
+  async handle(_ctx: JobContext<AppContext>): Promise<void> {
+    throw new Error("boom");
+  }
+}
+
+const jobs = { SendMail, Failing };
+const context: AppContext = { tenant: "acme" };
+
+function setup(now: () => number = () => 1_000) {
+  const dialect = new MemoryDialect();
+  const queue = new Queue(dialect, { jobs, now });
+  const worker = new Worker({ dialect, jobs, context, now });
+  return { dialect, queue, worker };
+}
+
+async function rawEnqueue(dialect: Dialect, body: string): Promise<void> {
+  await dialect.enqueue("default", body, { availableAt: 0, now: 0 });
+}
+
+describe("Worker", () => {
+  it("processes N jobs in enqueue order, each handle seeing its own payload", async () => {
+    seen.length = 0;
+    const { queue, worker } = setup();
+    for (const to of ["a", "b", "c"]) await queue.enqueue(new SendMail({ to }));
+
+    expect(await worker.processOne()).toBe(true);
+    expect(await worker.processOne()).toBe(true);
+    expect(await worker.processOne()).toBe(true);
+
+    expect(seen.map((s) => s.to)).toEqual(["a", "b", "c"]);
+  });
+
+  it("gives each run the context fields plus a distinct signal", async () => {
+    seen.length = 0;
+    const { queue, worker } = setup();
+    await queue.enqueue(new SendMail({ to: "a" }));
+    await queue.enqueue(new SendMail({ to: "b" }));
+    await worker.processOne();
+    await worker.processOne();
+
+    expect(seen[0]?.ctx.tenant).toBe("acme");
+    expect(seen[0]?.ctx.signal).toBeInstanceOf(AbortSignal);
+    expect(seen[0]?.ctx.signal).not.toBe(seen[1]?.ctx.signal);
+  });
+
+  it("returns false on an empty queue without calling any handle", async () => {
+    seen.length = 0;
+    const { worker } = setup();
+    await expect(worker.processOne()).resolves.toBe(false);
+    expect(seen).toHaveLength(0);
+  });
+
+  it("acknowledges a successful job so nothing is ready or reserved", async () => {
+    seen.length = 0;
+    const { dialect, queue, worker } = setup();
+    await queue.enqueue(new SendMail({ to: "a" }));
+    await worker.processOne();
+    await expect(dialect.count("default", 1_000)).resolves.toEqual({ ready: 0, delayed: 0, reserved: 0 });
+  });
+
+  it("propagates a throwing handle and leaves the message reserved, then redeliverable after lease", async () => {
+    let clock = 1_000;
+    const dialect = new MemoryDialect();
+    const queue = new Queue(dialect, { jobs, now: () => clock });
+    const worker = new Worker({ dialect, jobs, context, now: () => clock, lease: 500 });
+    await queue.enqueue(new Failing({ to: "a" }));
+
+    await expect(worker.processOne()).rejects.toThrow("boom");
+    await expect(dialect.count("default", clock)).resolves.toEqual({ ready: 0, delayed: 0, reserved: 1 });
+
+    clock = 1_500;
+    const redelivered = await dialect.dequeue("default", { now: clock, leaseUntil: clock + 500 });
+    expect(redelivered).not.toBeNull();
+    expect(redelivered?.attempts).toBe(2);
+  });
+
+  it("throws for an unknown registry key and does not acknowledge", async () => {
+    const dialect = new MemoryDialect();
+    const worker = new Worker({ dialect, jobs, context, now: () => 1_000 });
+    await rawEnqueue(dialect, JSON.stringify({ job: "Nope", payload: { to: "a" } }));
+
+    await expect(worker.processOne()).rejects.toThrow(/Nope/);
+    await expect(dialect.count("default", 1_000)).resolves.toEqual({ ready: 0, delayed: 0, reserved: 1 });
+  });
+
+  it.each([
+    ["not JSON", "{not json"],
+    ["missing job", JSON.stringify({ payload: { to: "a" } })],
+    ["missing payload", JSON.stringify({ job: "SendMail" })],
+  ])("throws for a malformed envelope (%s) and does not acknowledge", async (_label, body) => {
+    const dialect = new MemoryDialect();
+    const worker = new Worker({ dialect, jobs, context, now: () => 1_000 });
+    await rawEnqueue(dialect, body);
+
+    await expect(worker.processOne()).rejects.toThrow(/envelope|JSON/i);
+    await expect(dialect.count("default", 1_000)).resolves.toEqual({ ready: 0, delayed: 0, reserved: 1 });
+  });
+
+  it("respects a custom queue name", async () => {
+    seen.length = 0;
+    const dialect = new MemoryDialect();
+    const queue = new Queue(dialect, { jobs, queue: "mail", now: () => 1_000 });
+    const worker = new Worker({ dialect, jobs, context, queue: "mail", now: () => 1_000 });
+    await queue.enqueue(new SendMail({ to: "a" }));
+
+    expect(await new Worker({ dialect, jobs, context, now: () => 1_000 }).processOne()).toBe(false);
+    expect(await worker.processOne()).toBe(true);
+    expect(seen.map((s) => s.to)).toEqual(["a"]);
+  });
+
+  it("uses a 30000 ms default lease for dequeue", async () => {
+    const dialect = new MemoryDialect();
+    const spy = vi.spyOn(dialect, "dequeue");
+    const queue = new Queue(dialect, { jobs, now: () => 5_000 });
+    const worker = new Worker({ dialect, jobs, context, now: () => 5_000 });
+    await queue.enqueue(new SendMail({ to: "a" }));
+
+    await worker.processOne();
+    expect(spy).toHaveBeenCalledWith("default", { now: 5_000, leaseUntil: 35_000 });
+  });
+
+  it("uses the injected now for dequeue and acknowledge", async () => {
+    const dialect = new MemoryDialect();
+    const dequeue = vi.spyOn(dialect, "dequeue");
+    const acknowledge = vi.spyOn(dialect, "acknowledge");
+    const queue = new Queue(dialect, { jobs, now: () => 7_000 });
+    const worker = new Worker({ dialect, jobs, context, now: () => 7_000, lease: 100 });
+    await queue.enqueue(new SendMail({ to: "a" }));
+
+    await worker.processOne();
+    expect(dequeue).toHaveBeenCalledWith("default", { now: 7_000, leaseUntil: 7_100 });
+    expect(acknowledge).toHaveBeenCalledWith("default", expect.any(String), 7_000);
+  });
+
+  describe("compile-time checks", () => {
+    it("rejects wrong context types and bad handle shapes", () => {
+      // Nothing here runs: the function exists so tsc checks each @ts-expect-error line.
+      const compileOnly = (dialect: Dialect) => {
+        // @ts-expect-error context.tenant must be a string, not a number
+        new Worker({ dialect, jobs, context: { tenant: 1 } });
+        new Worker({ dialect, jobs, context });
+      };
+      expect(compileOnly).toBeTypeOf("function");
+    });
+  });
+});
