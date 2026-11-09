@@ -23,7 +23,8 @@
     "test": "vitest run --coverage",
     "typecheck": "tsc -p tsconfig.test.json",
     "lint": "biome check src vitest.config.ts",
-    "lint:fix": "biome check --write src vitest.config.ts"
+    "lint:fix": "biome check --write src vitest.config.ts",
+    "type-coverage": "type-coverage --strict --at-least 100"
   },
   "peerDependencies": {
     "@aws-sdk/client-sqs": "^3.1163.0",
@@ -47,6 +48,7 @@
     "@vitest/coverage-v8": "^5.1.0",
     "ioredis": "^6.0.0",
     "testcontainers": "^12.2.1",
+    "type-coverage": "^2.31.2",
     "typescript": "^7.0.2",
     "vitest": "^5.1.0"
   },
