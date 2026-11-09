@@ -59,6 +59,7 @@ export class Worker<R extends JobRegistry> {
   private readonly stopped = Promise.withResolvers<void>();
   private stopRequested = false;
   private running = false;
+  private dequeued = false;
 
   constructor(options: WorkerOptions<R>) {
     this.dialect = options.dialect;
@@ -104,7 +105,9 @@ export class Worker<R extends JobRegistry> {
    */
   async processOne(): Promise<boolean> {
     const now = this.now();
+    this.dequeued = false;
     const message = await this.dialect.dequeue(this.name, { now, leaseUntil: now + this.lease });
+    this.dequeued = true;
     if (message === null) return false;
 
     try {
@@ -157,7 +160,8 @@ export class Worker<R extends JobRegistry> {
           ran = await this.processOne();
         } catch {
           // Known gap until TS-92: the error is dropped. processOne has already released or acknowledged the message.
-          ran = true;
+          // A dequeue failure (no message yet) falls through to the idle wait so a dead dialect cannot hot-loop.
+          ran = this.dequeued;
         }
         if (!ran) await this.idle();
       }
