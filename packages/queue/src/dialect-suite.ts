@@ -60,6 +60,45 @@ export function runDialectSuite(name: string, create: () => Dialect): void {
       expect(await d.count("jobs", 1000)).toEqual({ ready: 2, delayed: 3, reserved: 0 });
     });
 
+    it("dequeue on an empty queue returns null", async () => {
+      const d = create();
+      expect(await d.dequeue("jobs", { now: 1000, leaseUntil: 2000 })).toBeNull();
+    });
+
+    it("dequeue hides a message until its lease expires, then redelivers it with attempts + 1", async () => {
+      const d = create();
+      const id = await d.enqueue("jobs", "a", { availableAt: 1000, now: 1000 });
+      const first = await d.dequeue("jobs", { now: 1000, leaseUntil: 2000 });
+      expect(first?.id).toBe(id);
+      expect(first?.attempts).toBe(1);
+      expect(await d.dequeue("jobs", { now: 1500, leaseUntil: 2500 })).toBeNull();
+      const again = await d.dequeue("jobs", { now: 2000, leaseUntil: 3000 });
+      expect(again?.id).toBe(id);
+      expect(again?.attempts).toBe(2);
+    });
+
+    it("two consumers never hold the same message while its lease is live", async () => {
+      const d = create();
+      await d.enqueue("jobs", "a", { availableAt: 1000, now: 1000 });
+      await d.enqueue("jobs", "b", { availableAt: 1000, now: 1000 });
+      const one = await d.dequeue("jobs", { now: 1000, leaseUntil: 2000 });
+      const two = await d.dequeue("jobs", { now: 1000, leaseUntil: 2000 });
+      expect(one).not.toBeNull();
+      expect(two).not.toBeNull();
+      expect(one?.id).not.toBe(two?.id);
+      expect(await d.dequeue("jobs", { now: 1500, leaseUntil: 2500 })).toBeNull();
+    });
+
+    it("dequeue returns id, payload, attempts, and a receipt that changes on every delivery", async () => {
+      const d = create();
+      const id = await d.enqueue("jobs", "hello", { availableAt: 1000, now: 1000 });
+      const first = await d.dequeue("jobs", { now: 1000, leaseUntil: 2000 });
+      expect(first).toEqual({ id, payload: "hello", attempts: 1, receipt: expect.any(String) });
+      const again = await d.dequeue("jobs", { now: 2000, leaseUntil: 3000 });
+      expect(again?.payload).toBe("hello");
+      expect(again?.receipt).not.toBe(first?.receipt);
+    });
+
     exact("count ignores messages enqueued under another name", async () => {
       const d = create();
       await d.enqueue("jobs", "a", { availableAt: 1000, now: 1000 });
