@@ -156,7 +156,7 @@ export class Worker<R extends JobRegistry> {
             await this.dialect.acknowledge(this.name, message.receipt, failedAt);
           }
         } catch (dialectError) {
-          this.reportDialectError(dialectError);
+          this.dialectFailure = { error: dialectError };
         }
       }
       throw error;
