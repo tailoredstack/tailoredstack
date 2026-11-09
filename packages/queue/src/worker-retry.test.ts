@@ -204,8 +204,8 @@ describe("Worker retry", () => {
 
   it("rejects invalid backoffBase, backoffCap, and tries in the constructor", () => {
     const dialect = new MemoryDialect();
-    const mk = (options: { tries?: number; backoffBase?: number; backoffCap?: number }) =>
-      () => new Worker({ dialect, jobs, context, ...options });
+    const mk = (options: { tries?: number; backoffBase?: number; backoffCap?: number }) => () =>
+      new Worker({ dialect, jobs, context, ...options });
 
     expect(mk({ backoffBase: 0 })).toThrow(/backoffBase/);
     expect(mk({ backoffBase: -1 })).toThrow(/backoffBase/);
