@@ -167,7 +167,9 @@ export function runDialectSuite(name: string, create: () => Dialect): void {
       const second = await d.dequeue("jobs", { now: 2000, leaseUntil: 3000 });
       expect(first?.receipt).not.toBe(second?.receipt);
       expect(await d.acknowledge("jobs", must(first, "first delivery").receipt, 2500)).toBe(false);
-      expect(await d.release("jobs", must(first, "first delivery").receipt, { availableAt: 2600, now: 2500 })).toBe(false);
+      expect(await d.release("jobs", must(first, "first delivery").receipt, { availableAt: 2600, now: 2500 })).toBe(
+        false,
+      );
       expect(await d.acknowledge("jobs", must(second, "second delivery").receipt, 2500)).toBe(true);
     });
 
