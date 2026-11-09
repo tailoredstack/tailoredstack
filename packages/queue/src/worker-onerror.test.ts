@@ -129,21 +129,33 @@ describe("Worker onError routing for dialect errors", () => {
     expect(log).toEqual(["sleep"]);
   });
 
-  it("release rejects during a retry: onError gets the release error, processOne rejects with the original handle error, handle is called once", async () => {
+  it("release rejects during a retry: onError gets the release error via run(), processOne rejects with the original handle error, handle is called once", async () => {
     const onError = vi.fn();
     const h = setup({ onError });
     const handleSpy = vi.fn();
     onRun = handleSpy;
     failing.add("a");
+    onSleep = () => {
+      h.worker.stop();
+      return Promise.resolve();
+    };
     await h.queue.enqueue(new Mail({ to: "a" }));
     vi.spyOn(h.dialect, "release").mockRejectedValueOnce(releaseDown);
 
-    const outcome = h.worker.processOne();
+    await expect(h.worker.run()).resolves.toBeUndefined();
 
-    await expect(outcome).rejects.toBe(boom);
+    expect(handleSpy).toHaveBeenCalledTimes(1);
     expect(onError).toHaveBeenCalledTimes(1);
     expect(onError.mock.calls[0]?.[0]).toBe(releaseDown);
-    expect(handleSpy).toHaveBeenCalledTimes(1);
+  });
+
+  it("release rejects during a retry: processOne itself rejects with the original handle error", async () => {
+    const h = setup();
+    failing.add("a");
+    await h.queue.enqueue(new Mail({ to: "a" }));
+    vi.spyOn(h.dialect, "release").mockRejectedValueOnce(releaseDown);
+
+    await expect(h.worker.processOne()).rejects.toBe(boom);
   });
 
   it("acknowledge rejects on the success path: onError gets the error, the handle has run, and run() does not reject", async () => {
@@ -163,17 +175,30 @@ describe("Worker onError routing for dialect errors", () => {
     expect(onError.mock.calls[0]?.[0]).toBe(ackDown);
   });
 
-  it("acknowledge rejects on the final failed attempt: onError gets the error, and the handle error still propagates from processOne", async () => {
+  it("acknowledge rejects on the final failed attempt: onError gets the error via run(), and the handle error still propagates from processOne", async () => {
     const onError = vi.fn();
     const h = setup({ onError, tries: 1 });
+    failing.add("a");
+    onSleep = () => {
+      h.worker.stop();
+      return Promise.resolve();
+    };
+    await h.queue.enqueue(new Mail({ to: "a" }));
+    vi.spyOn(h.dialect, "acknowledge").mockRejectedValueOnce(ackDown);
+
+    await expect(h.worker.run()).resolves.toBeUndefined();
+
+    expect(onError).toHaveBeenCalledTimes(1);
+    expect(onError.mock.calls[0]?.[0]).toBe(ackDown);
+  });
+
+  it("acknowledge rejects on the final failed attempt: processOne itself rejects with the handle error", async () => {
+    const h = setup({ tries: 1 });
     failing.add("a");
     await h.queue.enqueue(new Mail({ to: "a" }));
     vi.spyOn(h.dialect, "acknowledge").mockRejectedValueOnce(ackDown);
 
     await expect(h.worker.processOne()).rejects.toBe(boom);
-
-    expect(onError).toHaveBeenCalledTimes(1);
-    expect(onError.mock.calls[0]?.[0]).toBe(ackDown);
   });
 
   it("handle throws: onError is NOT called, in processOne or in run()", async () => {
