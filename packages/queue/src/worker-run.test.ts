@@ -49,7 +49,7 @@ function setup(options: { pollInterval?: number } = {}) {
     },
     ...options,
   });
-  return { dialect, queue, worker, sleeps };
+  return { dialect, queue, worker, sleeps, clock };
 }
 
 type Harness = ReturnType<typeof setup>;
@@ -194,6 +194,48 @@ describe("Worker run loop", () => {
     await first;
 
     await expect(h.worker.run()).resolves.toBeUndefined();
+  });
+
+  it("a poison envelope ahead of a good message: the good one runs and the poison is dropped after tries", async () => {
+    const h = setup();
+    await h.dialect.enqueue("default", JSON.stringify({ job: "Nope", payload: {} }), { availableAt: 0, now: 0 });
+    await h.queue.enqueue(new Mail({ to: "a" }));
+    onSleep = () => {
+      h.clock.now += 1_000;
+      if (h.clock.now >= 5_000) h.worker.stop();
+      return Promise.resolve();
+    };
+
+    await expect(h.worker.run()).resolves.toBeUndefined();
+
+    expect(log).toEqual(["run:a", "sleep", "sleep", "sleep", "sleep"]);
+    expect(h.sleeps).toEqual([1_000, 1_000, 1_000, 1_000]);
+    await expect(h.dialect.count("default", 5_000)).resolves.toEqual({ ready: 0, delayed: 0, reserved: 0 });
+  });
+
+  it("a poison envelope is redelivered at each backoff availableAt and gone after tries (MemoryDialect, injected clock)", async () => {
+    const dialect = new MemoryDialect();
+    const clock = { now: 1_000 };
+    const worker = new Worker({
+      dialect,
+      jobs,
+      context,
+      now: () => clock.now,
+      lease: 100,
+      sleep: () => Promise.resolve(),
+    });
+    await dialect.enqueue("default", JSON.stringify({ job: "Nope", payload: {} }), { availableAt: 0, now: 0 });
+
+    // Attempt 1 at 1000 releases to 2000; attempt 2 at 2000 releases to 4000; attempt 3 at 4000 acks.
+    await expect(worker.processOne()).rejects.toThrow(/Nope/);
+    clock.now = 2_000;
+    await expect(worker.processOne()).rejects.toThrow(/Nope/);
+    clock.now = 4_000;
+    await expect(worker.processOne()).rejects.toThrow(/Nope/);
+
+    clock.now = 1_000_000;
+    await expect(dialect.count("default", clock.now)).resolves.toEqual({ ready: 0, delayed: 0, reserved: 0 });
+    await expect(worker.processOne()).resolves.toBe(false);
   });
 
   it("stop() called twice does not throw", async () => {

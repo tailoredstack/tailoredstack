@@ -104,26 +104,39 @@ describe("Worker", () => {
     expect(redelivered?.attempts).toBe(2);
   });
 
-  it("throws for an unknown registry key and does not acknowledge", async () => {
+  it("rethrows an unknown registry key and releases it with backoff on attempt 1", async () => {
     const dialect = new MemoryDialect();
     const worker = new Worker({ dialect, jobs, context, now: () => 1_000 });
     await rawEnqueue(dialect, JSON.stringify({ job: "Nope", payload: { to: "a" } }));
 
     await expect(worker.processOne()).rejects.toThrow(/Nope/);
-    await expect(dialect.count("default", 1_000)).resolves.toEqual({ ready: 0, delayed: 0, reserved: 1 });
+    await expect(dialect.count("default", 1_000)).resolves.toEqual({ ready: 0, delayed: 1, reserved: 0 });
+    await expect(dialect.count("default", 2_000)).resolves.toEqual({ ready: 1, delayed: 0, reserved: 0 });
   });
 
   it.each([
     ["not JSON", "{not json"],
     ["missing job", JSON.stringify({ payload: { to: "a" } })],
     ["missing payload", JSON.stringify({ job: "SendMail" })],
-  ])("throws for a malformed envelope (%s) and does not acknowledge", async (_label, body) => {
+  ])("rethrows a malformed envelope (%s) and releases it with backoff on attempt 1", async (_label, body) => {
     const dialect = new MemoryDialect();
     const worker = new Worker({ dialect, jobs, context, now: () => 1_000 });
     await rawEnqueue(dialect, body);
 
     await expect(worker.processOne()).rejects.toThrow(/envelope|JSON/i);
-    await expect(dialect.count("default", 1_000)).resolves.toEqual({ ready: 0, delayed: 0, reserved: 1 });
+    await expect(dialect.count("default", 1_000)).resolves.toEqual({ ready: 0, delayed: 1, reserved: 0 });
+  });
+
+  it.each([
+    ["malformed envelope", "{not json", /JSON/],
+    ["unknown key", JSON.stringify({ job: "Nope", payload: {} }), /Nope/],
+  ])("acknowledges a %s once attempts equals tries", async (_label, body, error) => {
+    const dialect = new MemoryDialect();
+    const worker = new Worker({ dialect, jobs, context, now: () => 1_000, tries: 1 });
+    await rawEnqueue(dialect, body);
+
+    await expect(worker.processOne()).rejects.toThrow(error);
+    await expect(dialect.count("default", 1_000)).resolves.toEqual({ ready: 0, delayed: 0, reserved: 0 });
   });
 
   it("respects a custom queue name", async () => {
@@ -149,13 +162,13 @@ describe("Worker", () => {
     expect(spy).toHaveBeenCalledWith("default", { now: 5_000, leaseUntil: 35_000 });
   });
 
-  it("rejects a non-string job key without acknowledging", async () => {
+  it("rejects a non-string job key and releases it with backoff on attempt 1", async () => {
     const dialect = new MemoryDialect();
     const worker = new Worker({ dialect, jobs, context, now: () => 1_000 });
     await rawEnqueue(dialect, JSON.stringify({ job: 42, payload: {} }));
 
     await expect(worker.processOne()).rejects.toThrow(/job must be a string/);
-    await expect(dialect.count("default", 1_000)).resolves.toEqual({ ready: 0, delayed: 0, reserved: 1 });
+    await expect(dialect.count("default", 1_000)).resolves.toEqual({ ready: 0, delayed: 1, reserved: 0 });
   });
 
   it("falls back to Date.now when no clock is injected", async () => {
