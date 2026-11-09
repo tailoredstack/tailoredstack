@@ -55,11 +55,12 @@ export class Worker<R extends JobRegistry> {
   private readonly backoffBase: number;
   private readonly backoffCap: number;
   private readonly pollInterval: number;
-  private readonly sleep: (ms: number) => Promise<void>;
+  private readonly injectedSleep: ((ms: number) => Promise<void>) | undefined;
   private readonly stopped = Promise.withResolvers<void>();
   private stopRequested = false;
   private running = false;
   private dequeued = false;
+  private wake: (() => void) | undefined;
 
   constructor(options: WorkerOptions<R>) {
     this.dialect = options.dialect;
@@ -72,7 +73,7 @@ export class Worker<R extends JobRegistry> {
     this.backoffBase = options.backoffBase ?? DEFAULT_BACKOFF_BASE_MS;
     this.backoffCap = options.backoffCap ?? DEFAULT_BACKOFF_CAP_MS;
     this.pollInterval = options.pollInterval ?? DEFAULT_POLL_INTERVAL_MS;
-    this.sleep = options.sleep ?? defaultSleep;
+    this.injectedSleep = options.sleep;
 
     if (!Number.isInteger(this.tries) || this.tries < 1) {
       throw new Error(`Invalid tries ${this.tries}: must be an integer >= 1`);
@@ -174,11 +175,21 @@ export class Worker<R extends JobRegistry> {
   stop(): void {
     this.stopRequested = true;
     this.stopped.resolve();
+    this.wake?.();
   }
 
-  /** Idle wait that ends early when stop() is called. */
+  /** Idle wait that ends early when stop() is called. The default timer is cleared on stop so it does not keep the process alive. */
   private idle(): Promise<void> {
-    return Promise.race([this.sleep(this.pollInterval), this.stopped.promise]);
+    if (this.injectedSleep) return Promise.race([this.injectedSleep(this.pollInterval), this.stopped.promise]);
+    return new Promise<void>((resolve) => {
+      const done = (): void => {
+        clearTimeout(timer);
+        this.wake = undefined;
+        resolve();
+      };
+      this.wake = done;
+      const timer = setTimeout(done, this.pollInterval);
+    });
   }
 
   /** Delay after the failed `attempt` (1-based): min(cap, base * 2^(attempt - 1)). No jitter. */
@@ -192,10 +203,6 @@ export class Worker<R extends JobRegistry> {
       payload: unknown,
     ) => Job<unknown, RegistryContext<R>>;
   }
-}
-
-function defaultSleep(ms: number): Promise<void> {
-  return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
 /** Parses `{ job, payload }`. Throws without acknowledging anything when the envelope is malformed. */
