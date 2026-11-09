@@ -54,6 +54,18 @@ function isPlainStructure(value: object): boolean {
 }
 
 /**
+ * True when `value`'s prototype is some realm's `Array.prototype`: an object whose own
+ * `constructor` is named `Array` and whose prototype is an `Object.prototype` (so a
+ * `class extends Array` fails, since its prototype's `constructor` is the subclass). Null-prototype
+ * arrays fail at the first check. Cross-realm arrays pass: their name is still `Array`.
+ */
+function isPlainArray(value: unknown[]): boolean {
+  const proto: unknown = Object.getPrototypeOf(value);
+  if (proto === null) return false;
+  return (proto as { constructor: { name?: unknown } }).constructor.name === "Array";
+}
+
+/**
  * Throws unless `value` survives `JSON.stringify` and `JSON.parse` unchanged.
  * Plain objects, arrays, strings, finite numbers (not -0), booleans, and null only.
  * `ancestors` holds the current path so cycles fail; shared non-cyclic references pass.
@@ -71,6 +83,7 @@ function assertRoundTrips(value: unknown, path: string, ancestors: Set<object> =
   ancestors.add(value);
 
   if (Array.isArray(value)) {
+    if (!isPlainArray(value)) throw new Error(`${path} is not a plain array`);
     if (Reflect.ownKeys(value).length !== value.length + 1) {
       throw new Error(`${path} is sparse or has extra properties`);
     }
