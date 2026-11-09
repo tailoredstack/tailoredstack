@@ -69,15 +69,18 @@ export class MemoryDialect implements Dialect {
   async count(name: string, now: number): Promise<QueueCount> {
     let ready = 0;
     let delayed = 0;
+    let reserved = 0;
     for (const message of this.messages) {
       if (message.name !== name) continue;
-      if (message.availableAt <= now) {
+      if (message.leaseUntil > now) {
+        reserved += 1;
+      } else if (message.availableAt <= now) {
         ready += 1;
       } else {
         delayed += 1;
       }
     }
-    return { ready, delayed, reserved: 0 };
+    return { ready, delayed, reserved };
   }
 
   async close(): Promise<void> {
