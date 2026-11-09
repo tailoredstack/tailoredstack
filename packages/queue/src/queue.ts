@@ -162,7 +162,10 @@ export class Queue<R extends JobRegistry> {
 
   /** Reserves the next ready message for `lease` ms. Default and max come from the dialect rules. */
   async dequeue(lease = DEFAULT_LEASE_MS): Promise<Message | null> {
-    assertDuration(lease, "lease", "Lease", this.dialect.capabilities.maxLeaseMs, "maxLeaseMs");
+    if (!Number.isFinite(lease) || lease <= 0) {
+      throw new Error(`Invalid lease ${lease}: must be a finite number of ms > 0`);
+    }
+    assertDuration(lease, "Lease", this.dialect.capabilities.maxLeaseMs, "maxLeaseMs");
     const now = this.now();
     return this.dialect.dequeue(this.name, { now, leaseUntil: now + lease });
   }
@@ -173,7 +176,7 @@ export class Queue<R extends JobRegistry> {
 
   async release(receipt: Receipt, options: ReleaseOptions = {}): Promise<boolean> {
     const delay = options.delay ?? 0;
-    assertDuration(delay, "delay", "Delay", this.dialect.capabilities.maxDelayMs, "maxDelayMs");
+    assertDuration(delay, "Delay", this.dialect.capabilities.maxDelayMs, "maxDelayMs");
     const now = this.now();
     return this.dialect.release(this.name, receipt, { availableAt: now + delay, now });
   }
@@ -188,9 +191,9 @@ export class Queue<R extends JobRegistry> {
 }
 
 /** Throws unless `value` is a finite number >= 0 and at most the dialect's `max`. */
-function assertDuration(value: number, label: string, title: string, max: number, maxLabel: string): void {
+function assertDuration(value: number, title: string, max: number, maxLabel: string): void {
   if (!Number.isFinite(value) || value < 0) {
-    throw new Error(`Invalid ${label} ${value}: must be a finite number of ms >= 0`);
+    throw new Error(`Invalid ${title.toLowerCase()} ${value}: must be a finite number of ms >= 0`);
   }
   if (value > max) {
     throw new Error(`${title} ${value}ms exceeds ${maxLabel} ${max}`);
