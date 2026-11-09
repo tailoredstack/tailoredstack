@@ -85,6 +85,14 @@ export function runDialectSuite(name: string, create: () => Dialect): void {
       expect(await d.count("jobs", 2000)).toEqual({ ready: 1, delayed: 0, reserved: 0 });
     });
 
+    it("dequeue picks the earliest-due ready message, not the first pushed", async () => {
+      const d = create();
+      await d.enqueue("jobs", "late-due", { availableAt: 2000, now: 1000 });
+      await d.enqueue("jobs", "early-due", { availableAt: 1000, now: 1000 });
+      expect((await d.dequeue("jobs", { now: 3000, leaseUntil: 4000 }))?.payload).toBe("early-due");
+      expect((await d.dequeue("jobs", { now: 3000, leaseUntil: 4000 }))?.payload).toBe("late-due");
+    });
+
     it("two consumers never hold the same message while its lease is live", async () => {
       const d = create();
       await d.enqueue("jobs", "a", { availableAt: 1000, now: 1000 });
