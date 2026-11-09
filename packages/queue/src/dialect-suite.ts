@@ -173,6 +173,30 @@ export function runDialectSuite(name: string, create: () => Dialect): void {
       expect(await d.acknowledge("jobs", must(second, "second delivery").receipt, 2500)).toBe(true);
     });
 
+    it("close is idempotent: await close(); await close() resolves", async () => {
+      const d = create();
+      await d.close();
+      await d.close();
+    });
+
+    it("after close, enqueue, dequeue, acknowledge, release, and count each reject", async () => {
+      const d = create();
+      await d.enqueue("jobs", "a", { availableAt: 1000, now: 1000 });
+      const msg = await d.dequeue("jobs", { now: 1000, leaseUntil: 2000 });
+      await d.close();
+      await expect(d.enqueue("jobs", "b", { availableAt: 1000, now: 1000 })).rejects.toThrow();
+      await expect(d.dequeue("jobs", { now: 1000, leaseUntil: 2000 })).rejects.toThrow();
+      await expect(d.acknowledge("jobs", must(msg, "delivery").receipt, 1500)).rejects.toThrow();
+      await expect(
+        d.release("jobs", must(msg, "delivery").receipt, { availableAt: 1600, now: 1500 }),
+      ).rejects.toThrow();
+      await expect(d.count("jobs", 1000)).rejects.toThrow();
+    });
+
+    it("close on a fresh dialect resolves", async () => {
+      await expect(create().close()).resolves.toBeUndefined();
+    });
+
     exact("count ignores messages enqueued under another name", async () => {
       const d = create();
       await d.enqueue("jobs", "a", { availableAt: 1000, now: 1000 });
