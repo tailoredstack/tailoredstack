@@ -5,6 +5,11 @@ import type { Job } from "./job.ts";
  * A concrete job class that declares its wire key as a type-only brand:
  * `declare readonly __jobKey: "SendMail";`. The brand is the only compile-time link
  * between a class and its registry key. It has no runtime field.
+ *
+ * Known bypass: a copied brand (`declare readonly __jobKey: "SendMail"` on a class that
+ * is not registered, with the same payload shape as the registered `SendMail`) passes
+ * compile. The runtime constructor check in `enqueue` is the second layer and rejects
+ * any class that is not in `jobs`.
  */
 type JobClass = abstract new (payload: never) => Job<unknown> & { readonly __jobKey: string };
 
@@ -29,6 +34,10 @@ export interface EnqueueOptions {
   readonly delay?: number;
 }
 
+/**
+ * Limit on the serialized envelope `{"job":...,"payload":...}`, the exact string the backend
+ * stores. The SQS 256 KiB cap applies to this string, not to `payload` alone.
+ */
 const MAX_PAYLOAD_BYTES = 262144;
 
 /**
@@ -90,6 +99,9 @@ export class Queue<R extends JobRegistry> {
     if (key === undefined) throw new Error(`Job class ${job.constructor.name} is not registered`);
 
     const delay = options.delay ?? 0;
+    if (!Number.isFinite(delay) || delay < 0) {
+      throw new Error(`Invalid delay ${delay}: must be a finite number of ms >= 0`);
+    }
     if (delay > this.dialect.capabilities.maxDelayMs) {
       throw new Error(`Delay ${delay}ms exceeds maxDelayMs ${this.dialect.capabilities.maxDelayMs}`);
     }
