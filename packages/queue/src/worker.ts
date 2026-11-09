@@ -25,9 +25,18 @@ export interface WorkerOptions<R extends JobRegistry> {
   readonly lease?: number;
   /** Injected clock, epoch ms. Defaults to `Date.now`. */
   readonly now?: () => number;
+  /** Total attempts per message, including the first. Integer >= 1. Defaults to 3. */
+  readonly tries?: number;
+  /** Delay in ms after the first failed attempt. Finite, > 0. Defaults to 1_000. */
+  readonly backoffBase?: number;
+  /** Upper bound in ms on any retry delay. Finite, >= `backoffBase`. Defaults to 60_000. */
+  readonly backoffCap?: number;
 }
 
 const DEFAULT_LEASE_MS = 30_000;
+const DEFAULT_TRIES = 3;
+const DEFAULT_BACKOFF_BASE_MS = 1_000;
+const DEFAULT_BACKOFF_CAP_MS = 60_000;
 
 /** Runs one job per `processOne` call, in dequeue order. */
 export class Worker<R extends JobRegistry> {
@@ -37,6 +46,9 @@ export class Worker<R extends JobRegistry> {
   private readonly name: string;
   private readonly lease: number;
   private readonly now: () => number;
+  private readonly tries: number;
+  private readonly backoffBase: number;
+  private readonly backoffCap: number;
 
   constructor(options: WorkerOptions<R>) {
     this.dialect = options.dialect;
@@ -45,6 +57,19 @@ export class Worker<R extends JobRegistry> {
     this.name = options.queue ?? "default";
     this.lease = options.lease ?? DEFAULT_LEASE_MS;
     this.now = options.now ?? (() => Date.now());
+    this.tries = options.tries ?? DEFAULT_TRIES;
+    this.backoffBase = options.backoffBase ?? DEFAULT_BACKOFF_BASE_MS;
+    this.backoffCap = options.backoffCap ?? DEFAULT_BACKOFF_CAP_MS;
+
+    if (!Number.isInteger(this.tries) || this.tries < 1) {
+      throw new Error(`Invalid tries ${this.tries}: must be an integer >= 1`);
+    }
+    if (!Number.isFinite(this.backoffBase) || this.backoffBase <= 0) {
+      throw new Error(`Invalid backoffBase ${this.backoffBase}: must be a finite number of ms > 0`);
+    }
+    if (!Number.isFinite(this.backoffCap) || this.backoffCap < this.backoffBase) {
+      throw new Error(`Invalid backoffCap ${this.backoffCap}: must be a finite number of ms >= backoffBase`);
+    }
 
     // Same class under two keys would run the wrong key's mapping. Mirrors Queue's runtime check.
     const keys = new Map<object, string>();
@@ -57,7 +82,11 @@ export class Worker<R extends JobRegistry> {
     }
   }
 
-  /** Dequeues and runs one job. Resolves `false` when nothing is ready. Acknowledges only on success. */
+  /**
+   * Dequeues and runs one job. Resolves `false` when nothing is ready. Acknowledges on success.
+   * On handle failure: releases with capped exponential backoff while attempts < tries, else acknowledges
+   * (drops). Always rethrows the original handle error.
+   */
   async processOne(): Promise<boolean> {
     const now = this.now();
     const message = await this.dialect.dequeue(this.name, { now, leaseUntil: now + this.lease });
@@ -71,10 +100,29 @@ export class Worker<R extends JobRegistry> {
     const ctx = Object.assign(Object.create(null), this.context, { signal: controller.signal }) as JobContext<
       RegistryContext<R>
     >;
-    await instance.handle(ctx);
+    try {
+      await instance.handle(ctx);
+    } catch (error) {
+      // A stale receipt (false) is ignored: the original handle error still propagates.
+      const failedAt = this.now();
+      if (message.attempts < this.tries) {
+        await this.dialect.release(this.name, message.receipt, {
+          availableAt: failedAt + this.backoffDelay(message.attempts),
+          now: failedAt,
+        });
+      } else {
+        await this.dialect.acknowledge(this.name, message.receipt, failedAt);
+      }
+      throw error;
+    }
 
     await this.dialect.acknowledge(this.name, message.receipt, this.now());
     return true;
+  }
+
+  /** Delay after the failed `attempt` (1-based): min(cap, base * 2^(attempt - 1)). No jitter. */
+  private backoffDelay(attempt: number): number {
+    return Math.min(this.backoffCap, this.backoffBase * 2 ** (attempt - 1));
   }
 
   private lookup(key: string): new (payload: unknown) => Job<unknown, RegistryContext<R>> {
