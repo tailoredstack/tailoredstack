@@ -4,14 +4,16 @@ interface StoredMessage {
   readonly id: string;
   readonly name: string;
   readonly payload: string;
-  readonly availableAt: number;
+  availableAt: number;
   leaseUntil: number;
   attempts: number;
+  /** Receipt of the current delivery; null when the message is not reserved. */
+  receipt: Receipt | null;
 }
 
 /**
  * In-process `Dialect`. Never reads a clock: every time is the caller's `now`.
- * `acknowledge`, `release`, and `close` are pending work.
+ * `close` is pending work.
  */
 export class MemoryDialect implements Dialect {
   readonly capabilities: DialectCapabilities = {
@@ -36,6 +38,7 @@ export class MemoryDialect implements Dialect {
       availableAt: at.availableAt,
       leaseUntil: Number.NEGATIVE_INFINITY,
       attempts: 0,
+      receipt: null,
     });
     return id;
   }
@@ -50,20 +53,25 @@ export class MemoryDialect implements Dialect {
     next.leaseUntil = at.leaseUntil;
     next.attempts += 1;
     this.receiptSequence += 1;
-    return {
-      id: next.id,
-      payload: next.payload,
-      attempts: next.attempts,
-      receipt: `${next.id}:${this.receiptSequence}` as Receipt,
-    };
+    const receipt = `${next.id}:${this.receiptSequence}` as Receipt;
+    next.receipt = receipt;
+    return { id: next.id, payload: next.payload, attempts: next.attempts, receipt };
   }
 
-  async acknowledge(_name: string, _receipt: Receipt, _now: number): Promise<boolean> {
-    throw new Error("not implemented");
+  async acknowledge(name: string, receipt: Receipt, now: number): Promise<boolean> {
+    const message = this.findLive(name, receipt, now);
+    if (!message) return false;
+    this.messages.splice(this.messages.indexOf(message), 1);
+    return true;
   }
 
-  async release(_name: string, _receipt: Receipt, _at: { availableAt: number; now: number }): Promise<boolean> {
-    throw new Error("not implemented");
+  async release(name: string, receipt: Receipt, at: { availableAt: number; now: number }): Promise<boolean> {
+    const message = this.findLive(name, receipt, at.now);
+    if (!message) return false;
+    message.leaseUntil = Number.NEGATIVE_INFINITY;
+    message.availableAt = at.availableAt;
+    message.receipt = null;
+    return true;
   }
 
   async count(name: string, now: number): Promise<QueueCount> {
@@ -81,6 +89,11 @@ export class MemoryDialect implements Dialect {
       }
     }
     return { ready, delayed, reserved };
+  }
+
+  /** The message holding `receipt` on queue `name` if that receipt is current and its lease is live. */
+  private findLive(name: string, receipt: Receipt, now: number): StoredMessage | undefined {
+    return this.messages.find((m) => m.name === name && m.receipt === receipt && m.leaseUntil > now);
   }
 
   async close(): Promise<void> {
