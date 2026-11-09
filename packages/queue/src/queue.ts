@@ -1,4 +1,4 @@
-import type { Dialect } from "./dialect.ts";
+import type { Dialect, Message, QueueCount, Receipt } from "./dialect.ts";
 import type { Job } from "./job.ts";
 
 /**
@@ -30,6 +30,14 @@ export interface QueueOptions<R extends JobRegistry> {
   readonly now?: () => number;
   /** Queue name passed to every dialect call. Defaults to `default`. */
   readonly queue?: string;
+}
+
+/** Default lease for `dequeue`, matching Worker. */
+const DEFAULT_LEASE_MS = 30_000;
+
+export interface ReleaseOptions {
+  /** Relative delay in ms before the released message is visible again. Omitted or 0 means now. */
+  readonly delay?: number;
 }
 
 export interface EnqueueOptions {
@@ -150,5 +158,41 @@ export class Queue<R extends JobRegistry> {
 
     const now = this.now();
     return this.dialect.enqueue(this.name, serialized, { availableAt: now + delay, now });
+  }
+
+  /** Reserves the next ready message for `lease` ms. Default and max come from the dialect rules. */
+  async dequeue(lease = DEFAULT_LEASE_MS): Promise<Message | null> {
+    assertDuration(lease, "lease", "Lease", this.dialect.capabilities.maxLeaseMs, "maxLeaseMs");
+    const now = this.now();
+    return this.dialect.dequeue(this.name, { now, leaseUntil: now + lease });
+  }
+
+  async acknowledge(receipt: Receipt): Promise<boolean> {
+    return this.dialect.acknowledge(this.name, receipt, this.now());
+  }
+
+  async release(receipt: Receipt, options: ReleaseOptions = {}): Promise<boolean> {
+    const delay = options.delay ?? 0;
+    assertDuration(delay, "delay", "Delay", this.dialect.capabilities.maxDelayMs, "maxDelayMs");
+    const now = this.now();
+    return this.dialect.release(this.name, receipt, { availableAt: now + delay, now });
+  }
+
+  async count(): Promise<QueueCount> {
+    return this.dialect.count(this.name, this.now());
+  }
+
+  async close(): Promise<void> {
+    await this.dialect.close();
+  }
+}
+
+/** Throws unless `value` is a finite number >= 0 and at most the dialect's `max`. */
+function assertDuration(value: number, label: string, title: string, max: number, maxLabel: string): void {
+  if (!Number.isFinite(value) || value < 0) {
+    throw new Error(`Invalid ${label} ${value}: must be a finite number of ms >= 0`);
+  }
+  if (value > max) {
+    throw new Error(`${title} ${value}ms exceeds ${maxLabel} ${max}`);
   }
 }
