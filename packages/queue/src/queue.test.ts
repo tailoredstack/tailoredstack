@@ -212,6 +212,26 @@ describe("Queue", () => {
       expect(() => new Queue(dialect, { jobs: { A: SendMail, B: SendMail } as never })).toThrow(/SendMail.*"A".*"B"/);
     });
 
+    it("rejects an Array subclass with its own prototype methods", async () => {
+      const { dialect, enqueue } = fakeDialect();
+      class Tagged extends Array<number> {
+        tag(): string {
+          return "x";
+        }
+      }
+      await expect(mailQueue(dialect, () => 0).enqueue(new SendMail(Tagged.from([1, 2]) as never))).rejects.toThrow(
+        /payload is not a plain object/,
+      );
+      expect(enqueue).not.toHaveBeenCalled();
+    });
+
+    it("accepts an array created in another realm", async () => {
+      const { dialect, enqueue } = fakeDialect();
+      const foreign = runInNewContext("[1, 2]") as never;
+      await mailQueue(dialect, () => 0).enqueue(new SendMail(foreign));
+      expect(enqueue).toHaveBeenCalledTimes(1);
+    });
+
     it("accepts a plain object created in another realm", async () => {
       const { dialect, enqueue } = fakeDialect();
       const foreign = runInNewContext("({ to: 'a', nested: [1, 2] })") as SendMailPayload;
