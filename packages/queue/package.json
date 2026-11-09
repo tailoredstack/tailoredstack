@@ -22,10 +22,9 @@
     "build": "tsc -p tsconfig.json",
     "test": "vitest run --coverage",
     "test:e2e": "vitest run --config vitest.e2e.config.ts",
-    "mutate": "node test/mutate.ts",
     "typecheck": "tsc -p tsconfig.test.json",
-    "lint": "biome check src test e2e vitest.config.ts vitest.e2e.config.ts",
-    "lint:fix": "biome check --write src test e2e vitest.config.ts vitest.e2e.config.ts"
+    "lint": "biome check src e2e vitest.config.ts vitest.e2e.config.ts",
+    "lint:fix": "biome check --write src e2e vitest.config.ts vitest.e2e.config.ts"
   },
   "peerDependencies": {
     "@aws-sdk/client-sqs": "^3.1163.0",
