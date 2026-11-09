@@ -31,9 +31,14 @@ export interface WorkerOptions<R extends JobRegistry> {
   readonly backoffBase?: number;
   /** Upper bound in ms on any retry delay. Finite, >= `backoffBase`. Defaults to 60_000. */
   readonly backoffCap?: number;
+  /** Idle wait in ms between empty dequeues. Finite, > 0. Defaults to 1_000. */
+  readonly pollInterval?: number;
+  /** Injected idle sleep. Defaults to a `setTimeout`-based sleep. */
+  readonly sleep?: (ms: number) => Promise<void>;
 }
 
 const DEFAULT_LEASE_MS = 30_000;
+const DEFAULT_POLL_INTERVAL_MS = 1_000;
 const DEFAULT_TRIES = 3;
 const DEFAULT_BACKOFF_BASE_MS = 1_000;
 const DEFAULT_BACKOFF_CAP_MS = 60_000;
@@ -49,6 +54,11 @@ export class Worker<R extends JobRegistry> {
   private readonly tries: number;
   private readonly backoffBase: number;
   private readonly backoffCap: number;
+  private readonly pollInterval: number;
+  private readonly sleep: (ms: number) => Promise<void>;
+  private readonly stopped = Promise.withResolvers<void>();
+  private stopRequested = false;
+  private running = false;
 
   constructor(options: WorkerOptions<R>) {
     this.dialect = options.dialect;
@@ -60,6 +70,8 @@ export class Worker<R extends JobRegistry> {
     this.tries = options.tries ?? DEFAULT_TRIES;
     this.backoffBase = options.backoffBase ?? DEFAULT_BACKOFF_BASE_MS;
     this.backoffCap = options.backoffCap ?? DEFAULT_BACKOFF_CAP_MS;
+    this.pollInterval = options.pollInterval ?? DEFAULT_POLL_INTERVAL_MS;
+    this.sleep = options.sleep ?? defaultSleep;
 
     if (!Number.isInteger(this.tries) || this.tries < 1) {
       throw new Error(`Invalid tries ${this.tries}: must be an integer >= 1`);
@@ -69,6 +81,9 @@ export class Worker<R extends JobRegistry> {
     }
     if (!Number.isFinite(this.backoffCap) || this.backoffCap < this.backoffBase) {
       throw new Error(`Invalid backoffCap ${this.backoffCap}: must be a finite number of ms >= backoffBase`);
+    }
+    if (!Number.isFinite(this.pollInterval) || this.pollInterval <= 0) {
+      throw new Error(`Invalid pollInterval ${this.pollInterval}: must be a finite number of ms > 0`);
     }
 
     // Same class under two keys would run the wrong key's mapping. Mirrors Queue's runtime check.
@@ -125,6 +140,42 @@ export class Worker<R extends JobRegistry> {
     return true;
   }
 
+  /**
+   * Loops `processOne()` until `stop()`. A job that ran is followed by an immediate dequeue; an empty dequeue
+   * waits `pollInterval`. A handler error is caught and the loop continues, so run() never rejects for it.
+   * Known gap until TS-92: handler errors are dropped here, with no onError hook.
+   * Rejects if run() is already active. A stop() before run() resolves it without dequeuing.
+   */
+  async run(): Promise<void> {
+    if (this.running) throw new Error("Worker.run() is already running");
+    this.running = true;
+    try {
+      while (!this.stopRequested) {
+        let ran: boolean;
+        try {
+          ran = await this.processOne();
+        } catch {
+          // Known gap until TS-92: the error is dropped. processOne has already released or acknowledged the message.
+          ran = true;
+        }
+        if (!ran) await this.idle();
+      }
+    } finally {
+      this.running = false;
+    }
+  }
+
+  /** Requests a stop. The in-flight job finishes, and an idle wait ends at once. Idempotent. */
+  stop(): void {
+    this.stopRequested = true;
+    this.stopped.resolve();
+  }
+
+  /** Idle wait that ends early when stop() is called. */
+  private idle(): Promise<void> {
+    return Promise.race([this.sleep(this.pollInterval), this.stopped.promise]);
+  }
+
   /** Delay after the failed `attempt` (1-based): min(cap, base * 2^(attempt - 1)). No jitter. */
   private backoffDelay(attempt: number): number {
     return Math.min(this.backoffCap, this.backoffBase * 2 ** (attempt - 1));
@@ -136,6 +187,10 @@ export class Worker<R extends JobRegistry> {
       payload: unknown,
     ) => Job<unknown, RegistryContext<R>>;
   }
+}
+
+function defaultSleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
 /** Parses `{ job, payload }`. Throws without acknowledging anything when the envelope is malformed. */
