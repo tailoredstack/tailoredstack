@@ -141,8 +141,17 @@ describe("Queue", () => {
     });
   });
 
-  describe("payload size limit", () => {
-    it("accepts a serialized payload of exactly 262144 bytes", async () => {
+  describe("invalid delay", () => {
+    it.each([-1, Number.NaN, Number.POSITIVE_INFINITY])("rejects delay %s before the dialect call", async (delay) => {
+      const { dialect, enqueue } = fakeDialect();
+      const queue = mailQueue(dialect, () => 0);
+      await expect(queue.enqueue(new SendMail({ to: "a" }), { delay })).rejects.toThrow(/finite number of ms >= 0/);
+      expect(enqueue).not.toHaveBeenCalled();
+    });
+  });
+
+  describe("envelope size limit", () => {
+    it("accepts an envelope of exactly 262144 bytes", async () => {
       const { dialect, enqueue } = fakeDialect();
       const queue = mailQueue(dialect, () => 0);
       const job = mailOfBytes(MAX_PAYLOAD_BYTES, false);
@@ -151,14 +160,14 @@ describe("Queue", () => {
       expect(Buffer.byteLength(payload, "utf8")).toBe(MAX_PAYLOAD_BYTES);
     });
 
-    it("rejects a serialized payload one byte over the limit without calling the dialect", async () => {
+    it("rejects an envelope one byte over the limit (262145 bytes) without calling the dialect", async () => {
       const { dialect, enqueue } = fakeDialect();
       const queue = mailQueue(dialect, () => 0);
       await expect(queue.enqueue(mailOfBytes(MAX_PAYLOAD_BYTES + 1, false))).rejects.toThrow();
       expect(enqueue).not.toHaveBeenCalled();
     });
 
-    it("counts multi-byte UTF-8 by bytes, not characters", async () => {
+    it("counts a multi-byte envelope by UTF-8 bytes, not characters", async () => {
       const { dialect, enqueue } = fakeDialect();
       const queue = mailQueue(dialect, () => 0);
       // Fewer than 262144 characters, but over 262144 bytes.
@@ -168,7 +177,7 @@ describe("Queue", () => {
       expect(enqueue).not.toHaveBeenCalled();
     });
 
-    it("passes a multi-byte payload that is exactly 262144 bytes", async () => {
+    it("passes a multi-byte envelope that is exactly 262144 bytes", async () => {
       const { dialect, enqueue } = fakeDialect();
       const queue = mailQueue(dialect, () => 0);
       await queue.enqueue(mailOfBytes(MAX_PAYLOAD_BYTES, true));
@@ -182,6 +191,18 @@ describe("Queue", () => {
       const queue = mailQueue(dialect, () => 0);
       const rogue = new Rogue({ to: "a" }) as unknown as SendMail;
       await expect(queue.enqueue(rogue)).rejects.toThrow();
+      expect(enqueue).not.toHaveBeenCalled();
+    });
+
+    it("throws at runtime for a hand-copied brand on an unregistered class", async () => {
+      class Copied extends Job<SendMailPayload> {
+        declare readonly __jobKey: "SendMail";
+
+        async handle(_signal: AbortSignal): Promise<void> {}
+      }
+      const { dialect, enqueue } = fakeDialect();
+      const queue = mailQueue(dialect, () => 0);
+      await expect(queue.enqueue(new Copied({ to: "a" }))).rejects.toThrow(/Copied is not registered/);
       expect(enqueue).not.toHaveBeenCalled();
     });
 
