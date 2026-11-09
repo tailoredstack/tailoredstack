@@ -13,7 +13,7 @@ interface StoredMessage {
 
 /**
  * In-process `Dialect`. Never reads a clock: every time is the caller's `now`.
- * `close` is pending work.
+ * After `close`, every other method rejects.
  */
 export class MemoryDialect implements Dialect {
   readonly capabilities: DialectCapabilities = {
@@ -27,8 +27,10 @@ export class MemoryDialect implements Dialect {
   private readonly messages: StoredMessage[] = [];
   private sequence = 0;
   private receiptSequence = 0;
+  private closed = false;
 
   async enqueue(name: string, payload: string, at: { availableAt: number; now: number }): Promise<string> {
+    this.assertOpen();
     this.sequence += 1;
     const id = `memory-${this.sequence}`;
     this.messages.push({
@@ -44,6 +46,7 @@ export class MemoryDialect implements Dialect {
   }
 
   async dequeue(name: string, at: { now: number; leaseUntil: number }): Promise<Message | null> {
+    this.assertOpen();
     // Ready: due and not under a live lease (live means now < leaseUntil). Earliest-due wins;
     // the stable sort keeps push order for ties.
     const [next] = this.messages
@@ -59,6 +62,7 @@ export class MemoryDialect implements Dialect {
   }
 
   async acknowledge(name: string, receipt: Receipt, now: number): Promise<boolean> {
+    this.assertOpen();
     const message = this.findLive(name, receipt, now);
     if (!message) return false;
     this.messages.splice(this.messages.indexOf(message), 1);
@@ -66,6 +70,7 @@ export class MemoryDialect implements Dialect {
   }
 
   async release(name: string, receipt: Receipt, at: { availableAt: number; now: number }): Promise<boolean> {
+    this.assertOpen();
     const message = this.findLive(name, receipt, at.now);
     if (!message) return false;
     message.leaseUntil = Number.NEGATIVE_INFINITY;
@@ -75,6 +80,7 @@ export class MemoryDialect implements Dialect {
   }
 
   async count(name: string, now: number): Promise<QueueCount> {
+    this.assertOpen();
     let ready = 0;
     let delayed = 0;
     let reserved = 0;
@@ -97,6 +103,10 @@ export class MemoryDialect implements Dialect {
   }
 
   async close(): Promise<void> {
-    throw new Error("not implemented");
+    this.closed = true;
+  }
+
+  private assertOpen(): void {
+    if (this.closed) throw new Error("MemoryDialect is closed");
   }
 }
