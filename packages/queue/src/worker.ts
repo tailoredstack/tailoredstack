@@ -35,7 +35,11 @@ export interface WorkerOptions<R extends JobRegistry> {
   readonly pollInterval?: number;
   /** Injected idle sleep. Defaults to a `setTimeout`-based sleep. */
   readonly sleep?: (ms: number) => Promise<void>;
-  /** Receives dialect errors (dequeue, release, acknowledge rejections). Handle errors are not reported here. Defaults to `console.error`, and the loop keeps running. */
+  /**
+   * Receives dialect errors (dequeue, release, acknowledge rejections). Handle errors are not reported here.
+   * Defaults to `console.error`. If onError throws, the throw is logged with console.error ("Worker onError threw:")
+   * and the loop keeps running; it is never rethrown.
+   */
   readonly onError?: (error: unknown) => void;
 }
 
@@ -224,12 +228,15 @@ export class Worker<R extends JobRegistry> {
     });
   }
 
-  /** Calls onError. A throw from onError is swallowed so it cannot break the loop. */
+  /**
+   * Calls onError. If onError throws, that error is logged with console.error ("Worker onError threw:") and dropped,
+   * so the loop keeps running. It is never rethrown.
+   */
   private reportDialectError(error: unknown): void {
     try {
       this.onError(error);
-    } catch {
-      // Intentionally discarded: onError must not stop run().
+    } catch (reporterError) {
+      console.error("Worker onError threw:", reporterError);
     }
   }
 
