@@ -52,8 +52,8 @@ describe("Job", () => {
 
   it("rejects the old two-argument handle shape at compile time", () => {
     const compileOnly = () => {
-      // @ts-expect-error handle takes one JobContext argument, not (signal, extra)
       class OldShape extends Job<SendEmailPayload> {
+        // @ts-expect-error handle takes one JobContext argument, not (signal, extra)
         async handle(_signal: AbortSignal, _extra: unknown): Promise<void> {}
       }
       return OldShape;

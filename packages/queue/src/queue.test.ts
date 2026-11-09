@@ -1,7 +1,7 @@
 import { runInNewContext } from "node:vm";
 import { describe, expect, it, vi } from "vitest";
 import type { Dialect, DialectCapabilities } from "./dialect.ts";
-import { Job } from "./job.ts";
+import { Job, type JobContext } from "./job.ts";
 import { Queue } from "./queue.ts";
 
 interface SendMailPayload {
@@ -15,18 +15,18 @@ interface ResizeImagePayload {
 class SendMail extends Job<SendMailPayload> {
   declare readonly __jobKey: "SendMail";
 
-  async handle(_signal: AbortSignal): Promise<void> {}
+  async handle(_ctx: JobContext<unknown>): Promise<void> {}
 }
 
 class ResizeImage extends Job<ResizeImagePayload> {
   declare readonly __jobKey: "ResizeImage";
 
-  async handle(_signal: AbortSignal): Promise<void> {}
+  async handle(_ctx: JobContext<unknown>): Promise<void> {}
 }
 
 // Same shape as SendMail, never registered, no brand.
 class Rogue extends Job<SendMailPayload> {
-  async handle(_signal: AbortSignal): Promise<void> {}
+  async handle(_ctx: JobContext<unknown>): Promise<void> {}
 }
 
 const MAX_PAYLOAD_BYTES = 262144;
@@ -199,7 +199,7 @@ describe("Queue", () => {
       class Copied extends Job<SendMailPayload> {
         declare readonly __jobKey: "SendMail";
 
-        async handle(_signal: AbortSignal): Promise<void> {}
+        async handle(_ctx: JobContext<unknown>): Promise<void> {}
       }
       const { dialect, enqueue } = fakeDialect();
       const queue = mailQueue(dialect, () => 0);
@@ -265,7 +265,7 @@ describe("Queue", () => {
     class Anything extends Job<unknown> {
       declare readonly __jobKey: "Anything";
 
-      async handle(_signal: AbortSignal): Promise<void> {}
+      async handle(_ctx: JobContext<unknown>): Promise<void> {}
     }
 
     const anyQueue = (dialect: Dialect) => new Queue(dialect, { jobs: { Anything } });
