@@ -167,7 +167,11 @@ export class Queue<R extends JobRegistry> {
     }
     assertDuration(lease, "Lease", this.dialect.capabilities.maxLeaseMs, "maxLeaseMs");
     const now = this.now();
-    return this.dialect.dequeue(this.name, { now, leaseUntil: now + lease });
+    const leaseUntil = now + lease;
+    if (leaseUntil <= now) {
+      throw new Error(`Invalid lease ${lease}: does not move leaseUntil past now ${now}`);
+    }
+    return this.dialect.dequeue(this.name, { now, leaseUntil });
   }
 
   async acknowledge(receipt: Receipt): Promise<boolean> {
