@@ -68,7 +68,9 @@ export class Worker<R extends JobRegistry> {
     const instance = new Cls(payload);
 
     const controller = new AbortController();
-    const ctx = Object.assign({}, this.context, { signal: controller.signal }) as JobContext<RegistryContext<R>>;
+    const ctx = Object.assign(Object.create(null), this.context, { signal: controller.signal }) as JobContext<
+      RegistryContext<R>
+    >;
     await instance.handle(ctx);
 
     await this.dialect.acknowledge(this.name, message.receipt, this.now());
