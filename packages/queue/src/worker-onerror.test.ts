@@ -298,6 +298,37 @@ describe("Worker onError routing for dialect errors", () => {
     expect(onError).not.toHaveBeenCalled();
   });
 
+  it("a clock throw does not repeat the previous dialect error: onError is called once with the dequeue error", async () => {
+    const onError = vi.fn();
+    let clockCalls = 0;
+    const now = (): number => {
+      clockCalls += 1;
+      // Call 1 is the first processOne dequeue time, which succeeds. Call 2 is the second processOne, which throws.
+      if (clockCalls === 2) throw clockDown;
+      return 1_000;
+    };
+    const dialect = new MemoryDialect();
+    let sleeps = 0;
+    const worker: Worker<typeof jobs> = new Worker({
+      dialect,
+      jobs,
+      context,
+      now,
+      onError,
+      sleep: () => {
+        sleeps += 1;
+        if (sleeps >= 2) worker.stop();
+        return Promise.resolve();
+      },
+    });
+    vi.spyOn(dialect, "dequeue").mockRejectedValueOnce(dequeueDown);
+
+    await expect(worker.run()).resolves.toBeUndefined();
+
+    expect(onError).toHaveBeenCalledTimes(1);
+    expect(onError).toHaveBeenCalledWith(dequeueDown);
+  });
+
   it("onError throwing does not stop run(): run() keeps going and processes the next message", async () => {
     const onError = vi.fn(() => {
       throw new Error("onError exploded");
