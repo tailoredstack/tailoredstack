@@ -198,6 +198,100 @@ describe("Queue", () => {
     });
   });
 
+  describe("strict payload walk", () => {
+    class Anything extends Job<unknown> {
+      declare readonly __jobKey: "Anything";
+
+      async handle(_signal: AbortSignal): Promise<void> {}
+    }
+
+    const anyQueue = (dialect: Dialect) => new Queue(dialect, { jobs: { Anything } });
+
+    async function expectRejected(payload: unknown, pattern: RegExp): Promise<void> {
+      const { dialect, enqueue } = fakeDialect();
+      await expect(anyQueue(dialect).enqueue(new Anything(payload))).rejects.toThrow(pattern);
+      expect(enqueue).not.toHaveBeenCalled();
+    }
+
+    async function expectAccepted(payload: unknown): Promise<void> {
+      const { dialect, enqueue } = fakeDialect();
+      await anyQueue(dialect).enqueue(new Anything(payload));
+      expect(enqueue).toHaveBeenCalledTimes(1);
+    }
+
+    it("rejects values JSON cannot represent: undefined, functions, symbols, bigint", async () => {
+      await expectRejected(undefined, /unserializable type undefined/);
+      await expectRejected(() => 1, /unserializable type function/);
+      await expectRejected(Symbol("s"), /unserializable type symbol/);
+      await expectRejected(1n, /unserializable type bigint/);
+    });
+
+    it("reports the path of a nested undefined, which JSON would silently drop", async () => {
+      await expectRejected({ a: { b: undefined } }, /payload\.a\.b is not|payload\.a\.b has/);
+      await expectRejected([undefined], /payload\.0 has unserializable type undefined/);
+    });
+
+    it("rejects non-finite numbers and -0", async () => {
+      await expectRejected(Number.NaN, /not a finite number/);
+      await expectRejected(Number.POSITIVE_INFINITY, /not a finite number/);
+      await expectRejected(Number.NEGATIVE_INFINITY, /not a finite number/);
+      await expectRejected(-0, /-0/);
+    });
+
+    it("rejects cycles", async () => {
+      const a: Record<string, unknown> = {};
+      a.self = a;
+      await expectRejected(a, /payload\.self is a cycle/);
+    });
+
+    it("accepts a shared reference that is not a cycle", async () => {
+      const shared = { x: 1 };
+      await expectAccepted({ a: shared, b: shared });
+    });
+
+    it("rejects non-plain objects: Date, Map, class instances", async () => {
+      await expectRejected(new Date(0), /not a plain object/);
+      await expectRejected(new Map(), /not a plain object/);
+      await expectRejected(new Anything(1), /not a plain object/);
+    });
+
+    it("rejects symbol keys, non-enumerable properties, and getters", async () => {
+      await expectRejected({ [Symbol("k")]: 1 }, /has a symbol key/);
+      await expectRejected(
+        Object.defineProperty({}, "hidden", { value: 1, enumerable: false }),
+        /hidden is not enumerable/,
+      );
+      await expectRejected(
+        {
+          get x() {
+            return 1;
+          },
+        },
+        /payload\.x is an accessor/,
+      );
+    });
+
+    it("rejects sparse arrays and arrays with extra properties", async () => {
+      const sparse: unknown[] = [];
+      sparse[2] = 1;
+      await expectRejected(sparse, /is sparse or has extra properties/);
+      await expectRejected(Object.assign([1], { extra: 2 }), /is sparse or has extra properties/);
+    });
+
+    it("accepts every JSON-safe shape, including null-prototype objects", async () => {
+      const nullProto = Object.assign(Object.create(null) as Record<string, unknown>, { k: "v" });
+      await expectAccepted(null);
+      await expectAccepted("s");
+      await expectAccepted(true);
+      await expectAccepted(0);
+      await expectAccepted(1.5);
+      await expectAccepted({});
+      await expectAccepted([]);
+      await expectAccepted({ nested: [1, "two", { three: null }], empty: {} });
+      await expectAccepted(nullProto);
+    });
+  });
+
   describe("compile-time checks", () => {
     it("declares the compile-time checks (type-checked only, never invoked)", () => {
       // Nothing here runs: the function exists so tsc checks each @ts-expect-error line.

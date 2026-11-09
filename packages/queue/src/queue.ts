@@ -32,6 +32,42 @@ export interface EnqueueOptions {
 const MAX_PAYLOAD_BYTES = 262144;
 
 /**
+ * Throws unless `value` survives `JSON.stringify` and `JSON.parse` unchanged.
+ * Plain objects, arrays, strings, finite numbers (not -0), booleans, and null only.
+ * `ancestors` holds the current path so cycles fail; shared non-cyclic references pass.
+ */
+function assertRoundTrips(value: unknown, path: string, ancestors: Set<object> = new Set()): void {
+  if (value === null || typeof value === "string" || typeof value === "boolean") return;
+  if (typeof value === "number") {
+    if (!Number.isFinite(value)) throw new Error(`${path} is not a finite number`);
+    if (Object.is(value, -0)) throw new Error(`${path} is -0, which JSON turns into 0`);
+    return;
+  }
+  if (typeof value !== "object") throw new Error(`${path} has unserializable type ${typeof value}`);
+
+  if (ancestors.has(value)) throw new Error(`${path} is a cycle`);
+  ancestors.add(value);
+
+  if (Array.isArray(value)) {
+    if (Reflect.ownKeys(value).length !== value.length + 1) {
+      throw new Error(`${path} is sparse or has extra properties`);
+    }
+    for (const [index, item] of value.entries()) assertRoundTrips(item, `${path}.${index}`, ancestors);
+  } else {
+    const proto: unknown = Object.getPrototypeOf(value);
+    if (proto !== Object.prototype && proto !== null) throw new Error(`${path} is not a plain object`);
+    if (Object.getOwnPropertySymbols(value).length > 0) throw new Error(`${path} has a symbol key`);
+    for (const [key, descriptor] of Object.entries(Object.getOwnPropertyDescriptors(value))) {
+      if (!descriptor.enumerable) throw new Error(`${path}.${key} is not enumerable`);
+      if (!("value" in descriptor)) throw new Error(`${path}.${key} is an accessor`);
+      assertRoundTrips(descriptor.value, `${path}.${key}`, ancestors);
+    }
+  }
+
+  ancestors.delete(value);
+}
+
+/**
  * Typed client that enqueues registered jobs. Only enqueue lives here; dequeue,
  * acknowledge, release, count, and close are out of scope (TS-90 and later).
  */
@@ -58,6 +94,7 @@ export class Queue<R extends JobRegistry> {
       throw new Error(`Delay ${delay}ms exceeds maxDelayMs ${this.dialect.capabilities.maxDelayMs}`);
     }
 
+    assertRoundTrips(job.payload, "payload");
     const serialized = JSON.stringify({ job: key, payload: job.payload });
     const bytes = new TextEncoder().encode(serialized).byteLength;
     if (bytes > MAX_PAYLOAD_BYTES) {
