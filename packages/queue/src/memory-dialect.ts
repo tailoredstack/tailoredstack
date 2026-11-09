@@ -1,0 +1,62 @@
+import type { Dialect, DialectCapabilities, Message, QueueCount, Receipt } from "./dialect.ts";
+
+interface StoredMessage {
+  readonly id: string;
+  readonly name: string;
+  readonly payload: string;
+  readonly availableAt: number;
+}
+
+/**
+ * In-process `Dialect`. Never reads a clock: every time is the caller's `now`.
+ * Only `enqueue` and `count` are implemented; the other methods are pending work.
+ */
+export class MemoryDialect implements Dialect {
+  readonly capabilities: DialectCapabilities = {
+    ordered: true,
+    exactCounts: true,
+    clockSource: "caller",
+    maxDelayMs: Number.POSITIVE_INFINITY,
+    maxLeaseMs: Number.POSITIVE_INFINITY,
+  };
+
+  private readonly messages: StoredMessage[] = [];
+  private sequence = 0;
+
+  async enqueue(name: string, payload: string, at: { availableAt: number; now: number }): Promise<string> {
+    this.sequence += 1;
+    const id = `memory-${this.sequence}`;
+    this.messages.push({ id, name, payload, availableAt: at.availableAt });
+    return id;
+  }
+
+  async dequeue(_name: string, _at: { now: number; leaseUntil: number }): Promise<Message | null> {
+    throw new Error("not implemented");
+  }
+
+  async acknowledge(_name: string, _receipt: Receipt, _now: number): Promise<boolean> {
+    throw new Error("not implemented");
+  }
+
+  async release(_name: string, _receipt: Receipt, _at: { availableAt: number; now: number }): Promise<boolean> {
+    throw new Error("not implemented");
+  }
+
+  async count(name: string, now: number): Promise<QueueCount> {
+    let ready = 0;
+    let delayed = 0;
+    for (const message of this.messages) {
+      if (message.name !== name) continue;
+      if (message.availableAt <= now) {
+        ready += 1;
+      } else {
+        delayed += 1;
+      }
+    }
+    return { ready, delayed, reserved: 0 };
+  }
+
+  async close(): Promise<void> {
+    throw new Error("not implemented");
+  }
+}

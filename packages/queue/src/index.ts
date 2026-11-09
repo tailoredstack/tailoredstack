@@ -7,3 +7,4 @@ export type {
   Receipt,
 } from "./dialect.ts";
 export { Job } from "./job.ts";
+export { MemoryDialect } from "./memory-dialect.ts";
