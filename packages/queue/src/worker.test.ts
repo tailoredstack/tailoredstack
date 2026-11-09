@@ -130,6 +130,7 @@ describe("Worker", () => {
   it.each([
     ["malformed envelope", "{not json", /JSON/],
     ["unknown key", JSON.stringify({ job: "Nope", payload: {} }), /Nope/],
+    ["non-string job key", JSON.stringify({ job: 42, payload: {} }), /job must be a string/],
   ])("acknowledges a %s once attempts equals tries", async (_label, body, error) => {
     const dialect = new MemoryDialect();
     const worker = new Worker({ dialect, jobs, context, now: () => 1_000, tries: 1 });
