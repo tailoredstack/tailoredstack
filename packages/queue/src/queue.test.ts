@@ -220,7 +220,7 @@ describe("Queue", () => {
         }
       }
       await expect(mailQueue(dialect, () => 0).enqueue(new SendMail(Tagged.from([1, 2]) as never))).rejects.toThrow(
-        /payload is not a plain object/,
+        /payload is not a plain array/,
       );
       expect(enqueue).not.toHaveBeenCalled();
     });
