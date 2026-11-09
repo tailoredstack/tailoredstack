@@ -115,9 +115,10 @@ export class Worker<R extends JobRegistry> {
    * while attempts < tries, else acknowledges (drops). Always rethrows the original error.
    */
   async processOne(): Promise<boolean> {
+    // Clear before the clock is read: a clock throw here must not re-report the previous job's dialect failure.
+    this.dialectFailure = undefined;
     const now = this.now();
     this.dequeued = false;
-    this.dialectFailure = undefined;
     let message: Message | null;
     try {
       message = await this.dialect.dequeue(this.name, { now, leaseUntil: now + this.lease });
