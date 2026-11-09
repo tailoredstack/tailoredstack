@@ -20,7 +20,7 @@ type JobClass = abstract new (payload: never) => Job<unknown, unknown> & { reado
 export type JobRegistry = { readonly [key: string]: JobClass };
 
 /** Rejects any entry whose class brand does not equal its registry key. */
-type BrandedRegistry<R> = {
+export type BrandedRegistry<R> = {
   readonly [K in keyof R]: R[K] extends abstract new (payload: never) => { readonly __jobKey: K } ? R[K] : never;
 };
 

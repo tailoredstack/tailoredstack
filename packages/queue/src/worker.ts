@@ -1,16 +1,22 @@
 import type { Dialect } from "./dialect.ts";
 import type { Job, JobContext } from "./job.ts";
-import type { JobRegistry } from "./queue.ts";
+import type { BrandedRegistry, JobRegistry } from "./queue.ts";
 
 /** The context type a job class expects, read from its `Job<Payload, Ctx>` base. */
 type ContextOf<C> = C extends abstract new (payload: never) => Job<unknown, infer X> ? X : never;
 
-/** The context every registered job expects. `context` on a Worker must satisfy this. */
-export type RegistryContext<R extends JobRegistry> = ContextOf<R[keyof R]>;
+/** Union-to-intersection: `U` becomes `A & B` when `U` is `A | B`. */
+type UnionToIntersection<U> = (U extends unknown ? (arg: U) => void : never) extends (arg: infer I) => void ? I : never;
+
+/**
+ * The context every registered job needs together: the intersection of every job's `Ctx`.
+ * A union here would let a context satisfy one job while missing another job's field.
+ */
+export type RegistryContext<R extends JobRegistry> = UnionToIntersection<ContextOf<R[keyof R]>>;
 
 export interface WorkerOptions<R extends JobRegistry> {
   readonly dialect: Dialect;
-  readonly jobs: R;
+  readonly jobs: R & BrandedRegistry<R>;
   /** Passed to every job run, merged with a fresh `signal`. */
   readonly context: RegistryContext<R>;
   /** Queue name. Defaults to `default`. */
@@ -39,6 +45,16 @@ export class Worker<R extends JobRegistry> {
     this.name = options.queue ?? "default";
     this.lease = options.lease ?? DEFAULT_LEASE_MS;
     this.now = options.now ?? (() => Date.now());
+
+    // Same class under two keys would run the wrong key's mapping. Mirrors Queue's runtime check.
+    const keys = new Map<object, string>();
+    for (const [key, cls] of Object.entries(options.jobs)) {
+      const existing = keys.get(cls);
+      if (existing !== undefined) {
+        throw new Error(`Job class ${cls.name} is registered under two keys: "${existing}" and "${key}"`);
+      }
+      keys.set(cls, key);
+    }
   }
 
   /** Dequeues and runs one job. Resolves `false` when nothing is ready. Acknowledges only on success. */
