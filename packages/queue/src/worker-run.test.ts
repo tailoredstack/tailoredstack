@@ -240,11 +240,13 @@ describe("Worker run loop", () => {
 
   it("a dequeue error waits pollInterval before the next dequeue", async () => {
     const h = setup({ pollInterval: 700 });
-    const dequeueSpy = vi.spyOn(h.dialect, "dequeue").mockRejectedValueOnce(new Error("db down"));
     const order: string[] = [];
-    dequeueSpy.mockImplementation(async () => {
+    let calls = 0;
+    vi.spyOn(h.dialect, "dequeue").mockImplementation(async () => {
+      calls += 1;
       order.push("dequeue");
-      if (order.length >= 3) h.worker.stop();
+      if (calls === 1) throw new Error("db down");
+      if (calls >= 3) h.worker.stop();
       return null;
     });
     onSleep = () => {
@@ -254,8 +256,8 @@ describe("Worker run loop", () => {
 
     await expect(h.worker.run()).resolves.toBeUndefined();
 
-    expect(order).toEqual(["dequeue", "sleep", "dequeue", "sleep", "dequeue"]);
-    expect(h.sleeps).toEqual([700, 700]);
+    expect(order).toEqual(["dequeue", "sleep", "dequeue", "sleep", "dequeue", "sleep"]);
+    expect(h.sleeps).toEqual([700, 700, 700]);
   });
 
   it("stop() called twice does not throw", async () => {
