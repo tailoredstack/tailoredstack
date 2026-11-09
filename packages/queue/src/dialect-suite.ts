@@ -77,6 +77,14 @@ export function runDialectSuite(name: string, create: () => Dialect): void {
       expect(again?.attempts).toBe(2);
     });
 
+    exact("count reports a leased message as reserved until its lease expires", async () => {
+      const d = create();
+      await d.enqueue("jobs", "a", { availableAt: 1000, now: 1000 });
+      await d.dequeue("jobs", { now: 1000, leaseUntil: 2000 });
+      expect(await d.count("jobs", 1500)).toEqual({ ready: 0, delayed: 0, reserved: 1 });
+      expect(await d.count("jobs", 2000)).toEqual({ ready: 1, delayed: 0, reserved: 0 });
+    });
+
     it("two consumers never hold the same message while its lease is live", async () => {
       const d = create();
       await d.enqueue("jobs", "a", { availableAt: 1000, now: 1000 });
