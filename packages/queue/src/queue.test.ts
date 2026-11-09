@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
-import { Job } from "./job.ts";
 import type { Dialect, DialectCapabilities } from "./dialect.ts";
+import { Job } from "./job.ts";
 import { Queue } from "./queue.ts";
 
 interface SendMailPayload {
