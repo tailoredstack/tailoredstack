@@ -260,6 +260,22 @@ describe("Worker run loop", () => {
     expect(h.sleeps).toEqual([700, 700, 700]);
   });
 
+  it("stop() clears the idle timer it woke", async () => {
+    vi.useFakeTimers();
+    try {
+      const dialect = new MemoryDialect();
+      const worker = new Worker({ dialect, jobs, context, now: () => 1_000, pollInterval: 5_000 });
+      const done = worker.run();
+      await vi.advanceTimersByTimeAsync(10);
+      expect(vi.getTimerCount()).toBe(1);
+      worker.stop();
+      await done;
+      expect(vi.getTimerCount()).toBe(0);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("stop() called twice does not throw", async () => {
     const h = setup();
     expect(() => {
