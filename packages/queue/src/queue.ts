@@ -10,6 +10,9 @@ import type { Job } from "./job.ts";
  * is not registered, with the same payload shape as the registered `SendMail`) passes
  * compile. The runtime constructor check in `enqueue` is the second layer and rejects
  * any class that is not in `jobs`.
+ *
+ * The compile-time brand already rejects `{ Alias: SendMail }` under a different key; the
+ * constructor's duplicate-class check is the runtime second layer for the same mistake.
  */
 type JobClass = abstract new (payload: never) => Job<unknown> & { readonly __jobKey: string };
 
@@ -41,6 +44,16 @@ export interface EnqueueOptions {
 const MAX_PAYLOAD_BYTES = 262144;
 
 /**
+ * True when `value`'s prototype is either null or an object whose own prototype is null,
+ * which is how `Object.prototype` looks from every realm. Class instances fail: their
+ * prototype's prototype is an ancestor class prototype, never null.
+ */
+function isPlainStructure(value: object): boolean {
+  const proto: unknown = Object.getPrototypeOf(value);
+  return proto === null || Object.getPrototypeOf(proto) === null;
+}
+
+/**
  * Throws unless `value` survives `JSON.stringify` and `JSON.parse` unchanged.
  * Plain objects, arrays, strings, finite numbers (not -0), booleans, and null only.
  * `ancestors` holds the current path so cycles fail; shared non-cyclic references pass.
@@ -63,9 +76,10 @@ function assertRoundTrips(value: unknown, path: string, ancestors: Set<object> =
     }
     for (const [index, item] of value.entries()) assertRoundTrips(item, `${path}.${index}`, ancestors);
   } else {
-    const proto: unknown = Object.getPrototypeOf(value);
-    if (proto !== Object.prototype && proto !== null) throw new Error(`${path} is not a plain object`);
+    // Plain data only: no class instances with methods or internal slots. The prototype is
+    // checked by shape (`isPlainStructure`), not identity, so objects from another realm pass.
     if (Object.getOwnPropertySymbols(value).length > 0) throw new Error(`${path} has a symbol key`);
+    if (!isPlainStructure(value)) throw new Error(`${path} is not a plain object`);
     for (const [key, descriptor] of Object.entries(Object.getOwnPropertyDescriptors(value))) {
       if (!descriptor.enumerable) throw new Error(`${path}.${key} is not enumerable`);
       if (!("value" in descriptor)) throw new Error(`${path}.${key} is an accessor`);
@@ -89,7 +103,15 @@ export class Queue<R extends JobRegistry> {
     private readonly dialect: Dialect,
     options: QueueOptions<R>,
   ) {
-    for (const [key, cls] of Object.entries(options.jobs)) this.keys.set(cls, key);
+    // Same class under two keys would silently overwrite the first mapping. The brand catches
+    // most of this at compile time; this check is the runtime second layer.
+    for (const [key, cls] of Object.entries(options.jobs)) {
+      const existing = this.keys.get(cls);
+      if (existing !== undefined) {
+        throw new Error(`Job class ${cls.name} is registered under two keys: "${existing}" and "${key}"`);
+      }
+      this.keys.set(cls, key);
+    }
     this.now = options.now ?? (() => Date.now());
     this.name = options.queue ?? "default";
   }
