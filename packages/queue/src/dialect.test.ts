@@ -1,5 +1,5 @@
 import { describe, expectTypeOf, it } from "vitest";
-import type { Dialect, DialectCapabilities, Message, QueueCount, Receipt } from "./dialect.js";
+import type { Dialect, DialectCapabilities, Message, QueueCount, Receipt } from "./dialect.ts";
 
 const capabilities: DialectCapabilities = {
   ordered: true,
