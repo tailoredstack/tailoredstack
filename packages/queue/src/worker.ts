@@ -1,4 +1,4 @@
-import type { Dialect } from "./dialect.ts";
+import type { Dialect, Message } from "./dialect.ts";
 import type { Job, JobContext } from "./job.ts";
 import type { BrandedRegistry, JobRegistry } from "./queue.ts";
 
@@ -35,6 +35,8 @@ export interface WorkerOptions<R extends JobRegistry> {
   readonly pollInterval?: number;
   /** Injected idle sleep. Defaults to a `setTimeout`-based sleep. */
   readonly sleep?: (ms: number) => Promise<void>;
+  /** Receives dialect errors (dequeue, release, acknowledge rejections). Handle errors are not reported here. Defaults to a no-op. */
+  readonly onError?: (error: unknown) => void;
 }
 
 const DEFAULT_LEASE_MS = 30_000;
@@ -56,10 +58,13 @@ export class Worker<R extends JobRegistry> {
   private readonly backoffCap: number;
   private readonly pollInterval: number;
   private readonly injectedSleep: ((ms: number) => Promise<void>) | undefined;
+  private readonly onError: (error: unknown) => void;
   private readonly stopped = Promise.withResolvers<void>();
   private stopRequested = false;
   private running = false;
   private dequeued = false;
+  /** Set by processOne when a dialect call that run() must report (dequeue, success-path acknowledge) rejects. */
+  private dialectFailure: { error: unknown } | undefined;
   private wake: (() => void) | undefined;
 
   constructor(options: WorkerOptions<R>) {
@@ -74,6 +79,7 @@ export class Worker<R extends JobRegistry> {
     this.backoffCap = options.backoffCap ?? DEFAULT_BACKOFF_CAP_MS;
     this.pollInterval = options.pollInterval ?? DEFAULT_POLL_INTERVAL_MS;
     this.injectedSleep = options.sleep;
+    this.onError = options.onError ?? (() => {});
 
     if (!Number.isInteger(this.tries) || this.tries < 1) {
       throw new Error(`Invalid tries ${this.tries}: must be an integer >= 1`);
@@ -107,7 +113,14 @@ export class Worker<R extends JobRegistry> {
   async processOne(): Promise<boolean> {
     const now = this.now();
     this.dequeued = false;
-    const message = await this.dialect.dequeue(this.name, { now, leaseUntil: now + this.lease });
+    this.dialectFailure = undefined;
+    let message: Message | null;
+    try {
+      message = await this.dialect.dequeue(this.name, { now, leaseUntil: now + this.lease });
+    } catch (error) {
+      this.dialectFailure = { error };
+      throw error;
+    }
     this.dequeued = true;
     if (message === null) return false;
 
@@ -124,31 +137,46 @@ export class Worker<R extends JobRegistry> {
       await instance.handle(ctx);
     } catch (error) {
       // The original error always propagates. A stale receipt (false) is ignored as before.
-      // Any rejection during bookkeeping, including the injected clock, is discarded so it cannot replace the handle error.
+      // A clock throw here is discarded and skips bookkeeping. A release or acknowledge rejection is reported to onError,
+      // and never replaces the handle error.
+      let failedAt: number | undefined;
       try {
-        const failedAt = this.now();
-        if (message.attempts < this.tries) {
-          await this.dialect.release(this.name, message.receipt, {
-            availableAt: failedAt + this.backoffDelay(message.attempts),
-            now: failedAt,
-          });
-        } else {
-          await this.dialect.acknowledge(this.name, message.receipt, failedAt);
-        }
+        failedAt = this.now();
       } catch {
-        // Intentionally discarded: the handle error is the one the caller needs.
+        // Intentionally discarded: a clock failure must not replace the handle error.
+      }
+      if (failedAt !== undefined) {
+        try {
+          if (message.attempts < this.tries) {
+            await this.dialect.release(this.name, message.receipt, {
+              availableAt: failedAt + this.backoffDelay(message.attempts),
+              now: failedAt,
+            });
+          } else {
+            await this.dialect.acknowledge(this.name, message.receipt, failedAt);
+          }
+        } catch (dialectError) {
+          this.reportDialectError(dialectError);
+        }
       }
       throw error;
     }
 
-    await this.dialect.acknowledge(this.name, message.receipt, this.now());
+    const ackAt = this.now();
+    try {
+      await this.dialect.acknowledge(this.name, message.receipt, ackAt);
+    } catch (error) {
+      this.dialectFailure = { error };
+      throw error;
+    }
     return true;
   }
 
   /**
    * Loops `processOne()` until `stop()`. A job that ran is followed by an immediate dequeue; an empty dequeue
-   * waits `pollInterval`. A handler error is caught and the loop continues, so run() never rejects for it.
-   * Known gap until TS-92: handler errors are dropped here, with no onError hook.
+   * waits `pollInterval`. A dialect error (dequeue or success-path acknowledge) goes to `onError`. A handler error is
+   * caught and the loop continues, so run() never rejects for it. Handle errors are still dropped here, which is a
+   * remaining gap out of scope for TS-92. Envelope and unknown-key errors are also still dropped and not reported.
    * Rejects if run() is already active. A stop() before run() resolves it without dequeuing.
    */
   async run(): Promise<void> {
@@ -161,8 +189,10 @@ export class Worker<R extends JobRegistry> {
         try {
           ran = await this.processOne();
         } catch {
-          // Known gap until TS-92: the error is dropped. processOne has already released or acknowledged the message.
-          // A dequeue failure (no message yet) falls through to the idle wait so a dead dialect cannot hot-loop.
+          // Handle errors are dropped here (out of scope for TS-92). processOne has already released or acknowledged the message.
+          // A dialect failure is reported to onError. A dequeue failure (no message yet) falls through to the idle wait
+          // so a dead dialect cannot hot-loop.
+          if (this.dialectFailure !== undefined) this.reportDialectError(this.dialectFailure.error);
           ran = this.dequeued;
         }
         if (!ran) await this.idle();
@@ -192,6 +222,15 @@ export class Worker<R extends JobRegistry> {
       this.wake = done;
       const timer = setTimeout(done, this.pollInterval);
     });
+  }
+
+  /** Calls onError. A throw from onError is swallowed so it cannot break the loop. */
+  private reportDialectError(error: unknown): void {
+    try {
+      this.onError(error);
+    } catch {
+      // Intentionally discarded: onError must not stop run().
+    }
   }
 
   /** Delay after the failed `attempt` (1-based): min(cap, base * 2^(attempt - 1)). No jitter. */
