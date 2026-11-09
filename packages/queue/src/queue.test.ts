@@ -225,6 +225,15 @@ describe("Queue", () => {
       expect(enqueue).not.toHaveBeenCalled();
     });
 
+    it("rejects an array with a null prototype with a clean message", async () => {
+      const { dialect, enqueue } = fakeDialect();
+      const nullProtoArray = Object.setPrototypeOf([1, 2], null) as never;
+      await expect(mailQueue(dialect, () => 0).enqueue(new SendMail(nullProtoArray))).rejects.toThrow(
+        /payload is not a plain array/,
+      );
+      expect(enqueue).not.toHaveBeenCalled();
+    });
+
     it("accepts an array created in another realm", async () => {
       const { dialect, enqueue } = fakeDialect();
       const foreign = runInNewContext("[1, 2]") as never;
