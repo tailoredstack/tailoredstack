@@ -238,6 +238,26 @@ describe("Worker run loop", () => {
     await expect(worker.processOne()).resolves.toBe(false);
   });
 
+  it("a dequeue error waits pollInterval before the next dequeue", async () => {
+    const h = setup({ pollInterval: 700 });
+    const dequeueSpy = vi.spyOn(h.dialect, "dequeue").mockRejectedValueOnce(new Error("db down"));
+    const order: string[] = [];
+    dequeueSpy.mockImplementation(async () => {
+      order.push("dequeue");
+      if (order.length >= 3) h.worker.stop();
+      return null;
+    });
+    onSleep = () => {
+      order.push("sleep");
+      return Promise.resolve();
+    };
+
+    await expect(h.worker.run()).resolves.toBeUndefined();
+
+    expect(order).toEqual(["dequeue", "sleep", "dequeue", "sleep", "dequeue"]);
+    expect(h.sleeps).toEqual([700, 700]);
+  });
+
   it("stop() called twice does not throw", async () => {
     const h = setup();
     expect(() => {
