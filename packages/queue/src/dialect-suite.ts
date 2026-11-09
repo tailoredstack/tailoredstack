@@ -115,6 +115,56 @@ export function runDialectSuite(name: string, create: () => Dialect): void {
       expect(again?.receipt).not.toBe(first?.receipt);
     });
 
+    it("acknowledge removes the message and returns true", async () => {
+      const d = create();
+      await d.enqueue("jobs", "a", { availableAt: 1000, now: 1000 });
+      const msg = await d.dequeue("jobs", { now: 1000, leaseUntil: 2000 });
+      expect(await d.acknowledge("jobs", msg!.receipt, 1500)).toBe(true);
+      expect(await d.dequeue("jobs", { now: 9000, leaseUntil: 10000 })).toBeNull();
+    });
+
+    it("a second acknowledge with the same receipt returns false", async () => {
+      const d = create();
+      await d.enqueue("jobs", "a", { availableAt: 1000, now: 1000 });
+      const msg = await d.dequeue("jobs", { now: 1000, leaseUntil: 2000 });
+      expect(await d.acknowledge("jobs", msg!.receipt, 1500)).toBe(true);
+      expect(await d.acknowledge("jobs", msg!.receipt, 1500)).toBe(false);
+    });
+
+    it("acknowledge after lease expiry returns false and does not throw", async () => {
+      const d = create();
+      await d.enqueue("jobs", "a", { availableAt: 1000, now: 1000 });
+      const msg = await d.dequeue("jobs", { now: 1000, leaseUntil: 2000 });
+      await expect(d.acknowledge("jobs", msg!.receipt, 2000)).resolves.toBe(false);
+    });
+
+    it("release after lease expiry returns false and does not throw", async () => {
+      const d = create();
+      await d.enqueue("jobs", "a", { availableAt: 1000, now: 1000 });
+      const msg = await d.dequeue("jobs", { now: 1000, leaseUntil: 2000 });
+      await expect(d.release("jobs", msg!.receipt, { availableAt: 2500, now: 2000 })).resolves.toBe(false);
+    });
+
+    it("release with a delay hides the message until that time", async () => {
+      const d = create();
+      await d.enqueue("jobs", "a", { availableAt: 1000, now: 1000 });
+      const msg = await d.dequeue("jobs", { now: 1000, leaseUntil: 2000 });
+      expect(await d.release("jobs", msg!.receipt, { availableAt: 5000, now: 1500 })).toBe(true);
+      expect(await d.dequeue("jobs", { now: 4999, leaseUntil: 6000 })).toBeNull();
+      expect((await d.dequeue("jobs", { now: 5000, leaseUntil: 6000 }))?.payload).toBe("a");
+    });
+
+    it("a stale receipt from an earlier delivery returns false for acknowledge and release", async () => {
+      const d = create();
+      await d.enqueue("jobs", "a", { availableAt: 1000, now: 1000 });
+      const first = await d.dequeue("jobs", { now: 1000, leaseUntil: 2000 });
+      const second = await d.dequeue("jobs", { now: 2000, leaseUntil: 3000 });
+      expect(first?.receipt).not.toBe(second?.receipt);
+      expect(await d.acknowledge("jobs", first!.receipt, 2500)).toBe(false);
+      expect(await d.release("jobs", first!.receipt, { availableAt: 2600, now: 2500 })).toBe(false);
+      expect(await d.acknowledge("jobs", second!.receipt, 2500)).toBe(true);
+    });
+
     exact("count ignores messages enqueued under another name", async () => {
       const d = create();
       await d.enqueue("jobs", "a", { availableAt: 1000, now: 1000 });
