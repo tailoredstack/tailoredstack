@@ -313,7 +313,7 @@ describe("Worker run loop", () => {
     await expect(worker.run()).resolves.toBeUndefined();
 
     // Dequeue 1 runs the job. The clock throws before dequeue 2 reaches the dialect, so the loop must sleep before dequeue 2.
-    expect(order).toEqual(["dequeue", "sleep", "dequeue"]);
+    expect(order).toEqual(["dequeue", "sleep", "dequeue", "sleep"]);
   });
 
   it("stop() during dequeue skips the idle wait on the default timer path", async () => {
