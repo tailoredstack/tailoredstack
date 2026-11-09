@@ -3,6 +3,7 @@ import type { Dialect } from "./dialect.ts";
 import type { JobContext } from "./job.ts";
 import { Job } from "./job.ts";
 import { MemoryDialect } from "./memory-dialect.ts";
+import type { JobRegistry } from "./queue.ts";
 import { Queue } from "./queue.ts";
 import { Worker } from "./worker.ts";
 
@@ -183,6 +184,36 @@ describe("Worker", () => {
     expect(acknowledge).toHaveBeenCalledWith("default", expect.any(String), 7_000);
   });
 
+  it("gives a job reading ctx.mailer the mailer when the context has it", async () => {
+    const mailed: string[] = [];
+    class NeedsMailer extends Job<MailPayload, { db: string; mailer: string }> {
+      declare readonly __jobKey: "NeedsMailer";
+
+      async handle(ctx: JobContext<{ db: string; mailer: string }>): Promise<void> {
+        mailed.push(ctx.mailer);
+      }
+    }
+    const registry = { NeedsMailer };
+    const dialect = new MemoryDialect();
+    const queue = new Queue(dialect, { jobs: registry, now: () => 1_000 });
+    const worker = new Worker({
+      dialect,
+      jobs: registry,
+      context: { db: "d", mailer: "smtp" },
+      now: () => 1_000,
+    });
+    await queue.enqueue(new NeedsMailer({ to: "a" }));
+
+    await worker.processOne();
+    expect(mailed).toEqual(["smtp"]);
+  });
+
+  it("throws at construction when one class is registered under two keys", () => {
+    const dialect = new MemoryDialect();
+    const dup = { SendMail, Alias: SendMail } as unknown as JobRegistry;
+    expect(() => new Worker({ dialect, jobs: dup, context: {} as never })).toThrow(/SendMail.*"SendMail".*"Alias"/);
+  });
+
   describe("compile-time checks", () => {
     it("rejects wrong context types and bad handle shapes", () => {
       // Nothing here runs: the function exists so tsc checks each @ts-expect-error line.
@@ -190,6 +221,36 @@ describe("Worker", () => {
         // @ts-expect-error context.tenant must be a string, not a number
         new Worker({ dialect, jobs, context: { tenant: 1 } });
         new Worker({ dialect, jobs, context });
+      };
+      expect(compileOnly).toBeTypeOf("function");
+    });
+
+    it("requires context to satisfy the intersection of every job's Ctx", () => {
+      class NeedsDb extends Job<MailPayload, { db: string }> {
+        declare readonly __jobKey: "NeedsDb";
+
+        async handle(ctx: JobContext<{ db: string }>): Promise<void> {
+          void ctx;
+        }
+      }
+      class NeedsDbMailer extends Job<MailPayload, { db: string; mailer: string }> {
+        declare readonly __jobKey: "NeedsDbMailer";
+
+        async handle(ctx: JobContext<{ db: string; mailer: string }>): Promise<void> {
+          void ctx.mailer;
+        }
+      }
+      const compileOnly = (dialect: Dialect) => {
+        // @ts-expect-error context lacks mailer, which NeedsDbMailer requires
+        new Worker({ dialect, jobs: { NeedsDb, NeedsDbMailer }, context: { db: "x" } });
+      };
+      expect(compileOnly).toBeTypeOf("function");
+    });
+
+    it("rejects a registry key that does not match the class brand", () => {
+      const compileOnly = (dialect: Dialect) => {
+        // @ts-expect-error Alias is not SendMail's brand key
+        new Worker({ dialect, jobs: { Alias: SendMail }, context });
       };
       expect(compileOnly).toBeTypeOf("function");
     });
