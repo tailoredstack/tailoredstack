@@ -88,7 +88,7 @@ describe("Worker", () => {
     await expect(dialect.count("default", 1_000)).resolves.toEqual({ ready: 0, delayed: 0, reserved: 0 });
   });
 
-  it("propagates a throwing handle and leaves the message reserved, then redeliverable after lease", async () => {
+  it("propagates a throwing handle and releases the message with backoff, then redeliverable at availableAt", async () => {
     let clock = 1_000;
     const dialect = new MemoryDialect();
     const queue = new Queue(dialect, { jobs, now: () => clock });
@@ -96,9 +96,9 @@ describe("Worker", () => {
     await queue.enqueue(new Failing({ to: "a" }));
 
     await expect(worker.processOne()).rejects.toThrow("boom");
-    await expect(dialect.count("default", clock)).resolves.toEqual({ ready: 0, delayed: 0, reserved: 1 });
+    await expect(dialect.count("default", clock)).resolves.toEqual({ ready: 0, delayed: 1, reserved: 0 });
 
-    clock = 1_500;
+    clock = 2_000;
     const redelivered = await dialect.dequeue("default", { now: clock, leaseUntil: clock + 500 });
     expect(redelivered).not.toBeNull();
     expect(redelivered?.attempts).toBe(2);
