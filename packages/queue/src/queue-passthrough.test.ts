@@ -86,6 +86,13 @@ describe("Queue pass-through methods", () => {
       expect(spies.dequeue).not.toHaveBeenCalled();
     });
 
+    it("rejects a lease too small to move leaseUntil past now before calling the dialect", async () => {
+      const { dialect, spies } = spiedDialect();
+      const queue = mailQueue(dialect, () => 1_700_000_000_000);
+      await expect(queue.dequeue(1e-4)).rejects.toThrow(/does not move leaseUntil past now/);
+      expect(spies.dequeue).not.toHaveBeenCalled();
+    });
+
     it("rejects a zero lease before calling the dialect", async () => {
       const { dialect, spies } = spiedDialect();
       const queue = mailQueue(dialect, () => 1_000);
