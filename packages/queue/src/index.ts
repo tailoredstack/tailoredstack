@@ -5,4 +5,4 @@ export type {
   Message,
   QueueCount,
   Receipt,
-} from "./dialect.js";
+} from "./dialect.ts";
