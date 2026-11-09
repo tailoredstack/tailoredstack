@@ -86,6 +86,13 @@ describe("Queue pass-through methods", () => {
       expect(spies.dequeue).not.toHaveBeenCalled();
     });
 
+    it("rejects a zero lease before calling the dialect", async () => {
+      const { dialect, spies } = spiedDialect();
+      const queue = mailQueue(dialect, () => 1_000);
+      await expect(queue.dequeue(0)).rejects.toThrow(/Invalid lease 0: must be a finite number of ms > 0/);
+      expect(spies.dequeue).not.toHaveBeenCalled();
+    });
+
     it.each([
       ["NaN", Number.NaN],
       ["Infinity", Number.POSITIVE_INFINITY],
