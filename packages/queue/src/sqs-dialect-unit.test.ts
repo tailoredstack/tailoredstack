@@ -450,6 +450,88 @@ describe("SqsDialect unit", () => {
     expect(deletes).toBe(1);
   });
 
+  it("does not overwrite a newer delivery when an in-flight acknowledgement succeeds", async () => {
+    let releaseDelete!: () => void;
+    const gate = new Promise<void>((resolve) => {
+      releaseDelete = resolve;
+    });
+    let received = 0;
+    let deletes = 0;
+    const client = {
+      async send(command: unknown): Promise<unknown> {
+        if (command instanceof CreateQueueCommand) return queueUrl();
+        if (command instanceof ReceiveMessageCommand) {
+          received += 1;
+          return {
+            Messages: [{ MessageId: "one", ReceiptHandle: received === 1 ? "first" : "second", Body: "body" }],
+          };
+        }
+        if (command instanceof DeleteMessageCommand) {
+          deletes += 1;
+          if (deletes === 1) await gate;
+          return {};
+        }
+        throw new Error("unexpected SQS call");
+      },
+    } as unknown as SqsClient;
+    const d = new SqsDialect({ client });
+    const first = await d.dequeue("jobs", { now, leaseUntil: now + 30_000 });
+    if (!first) throw new Error("expected a message");
+
+    const acknowledgement = d.acknowledge("jobs", first.receipt, now);
+    await vi.waitFor(() => expect(deletes).toBe(1));
+    const second = await d.dequeue("jobs", { now, leaseUntil: now + 30_000 });
+    if (!second) throw new Error("expected a redelivery");
+    expect(second.receipt).toBe(receipt("one:second"));
+
+    releaseDelete();
+    await expect(acknowledgement).resolves.toBe(true);
+    await expect(d.acknowledge("jobs", second.receipt, now)).resolves.toBe(true);
+    expect(deletes).toBe(2);
+  });
+
+  it("does not restore an older lease when the message is redelivered during a failed acknowledgement", async () => {
+    let releaseDelete!: () => void;
+    const gate = new Promise<void>((resolve) => {
+      releaseDelete = resolve;
+    });
+    let received = 0;
+    let deletes = 0;
+    const client = {
+      async send(command: unknown): Promise<unknown> {
+        if (command instanceof CreateQueueCommand) return queueUrl();
+        if (command instanceof ReceiveMessageCommand) {
+          received += 1;
+          return {
+            Messages: [{ MessageId: "one", ReceiptHandle: received === 1 ? "first" : "second", Body: "body" }],
+          };
+        }
+        if (command instanceof DeleteMessageCommand) {
+          deletes += 1;
+          if (deletes === 1) {
+            await gate;
+            throw sqsError("AccessDenied");
+          }
+          return {};
+        }
+        throw new Error("unexpected SQS call");
+      },
+    } as unknown as SqsClient;
+    const d = new SqsDialect({ client });
+    const first = await d.dequeue("jobs", { now, leaseUntil: now + 30_000 });
+    if (!first) throw new Error("expected a message");
+
+    const acknowledgement = d.acknowledge("jobs", first.receipt, now);
+    await vi.waitFor(() => expect(deletes).toBe(1));
+    const second = await d.dequeue("jobs", { now, leaseUntil: now + 30_000 });
+    if (!second) throw new Error("expected a redelivery");
+
+    releaseDelete();
+    await expect(acknowledgement).rejects.toThrow("AccessDenied");
+    await expect(d.acknowledge("jobs", second.receipt, now)).resolves.toBe(true);
+    expect(deletes).toBe(2);
+  });
+
   it("restores a live lease when an acknowledgement fails", async () => {
     let fail = true;
     const client = {
