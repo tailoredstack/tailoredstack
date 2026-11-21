@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
 import type { SQSClient } from "@aws-sdk/client-sqs";
 import type { Dialect, DialectCapabilities, Message, QueueCount, Receipt } from "./dialect.ts";
+import { QueueClosedError } from "./errors.ts";
 
 export type SqsClient = Pick<SQSClient, "send">;
 
@@ -327,6 +328,6 @@ export class SqsDialect implements Dialect {
   }
 
   #assertOpen(): void {
-    if (this.#closed) throw new Error("SqsDialect is closed");
+    if (this.#closed) throw new QueueClosedError("SqsDialect is closed");
   }
 }

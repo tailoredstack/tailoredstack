@@ -1,5 +1,6 @@
 import { Data, Effect } from "effect";
 import type { Message, QueueCount, Receipt } from "../dialect.ts";
+import { InvalidArgumentError, LimitError, QueueClosedError } from "../errors.ts";
 import type { EnqueueOptions, JobRegistry, Queue, ReleaseOptions } from "../queue.ts";
 
 export class QueueError extends Data.TaggedError("QueueError")<{
@@ -7,7 +8,10 @@ export class QueueError extends Data.TaggedError("QueueError")<{
   readonly cause: unknown;
 }> {}
 
-/** Effect-returning Queue. Broker, validation, and serialization failures surface as QueueError. */
+/** Failures the caller can act on; they pass through the wrapper unchanged. */
+export type QueueDomainError = InvalidArgumentError | LimitError | QueueClosedError;
+
+/** Effect-returning Queue. Domain errors pass through; anything else becomes a QueueError. */
 export class EffectQueue<R extends JobRegistry> {
   readonly #queue: Queue<R>;
 
@@ -15,34 +19,43 @@ export class EffectQueue<R extends JobRegistry> {
     this.#queue = queue;
   }
 
-  #try<A>(operation: string, run: () => Promise<A>): Effect.Effect<A, QueueError> {
-    return Effect.tryPromise({
-      try: run,
-      catch: (cause) => new QueueError({ operation, cause }),
-    });
+  #guard<A>(operation: string, run: () => Promise<A>): Effect.Effect<A, QueueError | QueueDomainError> {
+    return Effect.tryPromise({ try: run, catch: (cause) => cause }).pipe(
+      Effect.catch((cause): Effect.Effect<never, QueueError | QueueDomainError> => {
+        if (cause instanceof InvalidArgumentError || cause instanceof LimitError || cause instanceof QueueClosedError) {
+          return Effect.fail(cause);
+        }
+        return Effect.fail(new QueueError({ operation, cause }));
+      }),
+    );
   }
 
-  enqueue(job: InstanceType<R[keyof R]>, options?: EnqueueOptions): Effect.Effect<string, QueueError> {
-    return this.#try("enqueue", () => this.#queue.enqueue(job, options));
+  enqueue(
+    job: InstanceType<R[keyof R]>,
+    options?: EnqueueOptions,
+  ): Effect.Effect<string, QueueError | QueueDomainError> {
+    return this.#guard("enqueue", () => this.#queue.enqueue(job, options));
   }
 
-  dequeue(lease?: number): Effect.Effect<Message | null, QueueError> {
-    return this.#try("dequeue", () => this.#queue.dequeue(lease));
+  dequeue(lease?: number): Effect.Effect<Message | null, QueueError | QueueDomainError> {
+    return this.#guard("dequeue", () => this.#queue.dequeue(lease));
   }
 
-  acknowledge(receipt: Receipt): Effect.Effect<boolean, QueueError> {
-    return this.#try("acknowledge", () => this.#queue.acknowledge(receipt));
+  acknowledge(receipt: Receipt): Effect.Effect<boolean, QueueError | QueueDomainError> {
+    return this.#guard("acknowledge", () => this.#queue.acknowledge(receipt));
   }
 
-  release(receipt: Receipt, options?: ReleaseOptions): Effect.Effect<boolean, QueueError> {
-    return this.#try("release", () => this.#queue.release(receipt, options));
+  release(receipt: Receipt, options?: ReleaseOptions): Effect.Effect<boolean, QueueError | QueueDomainError> {
+    return this.#guard("release", () => this.#queue.release(receipt, options));
   }
 
-  count(): Effect.Effect<QueueCount, QueueError> {
-    return this.#try("count", () => this.#queue.count());
+  count(): Effect.Effect<QueueCount, QueueError | QueueDomainError> {
+    return this.#guard("count", () => this.#queue.count());
   }
 
-  close(): Effect.Effect<void, QueueError> {
-    return this.#try("close", () => this.#queue.close());
+  close(): Effect.Effect<void, QueueError | QueueDomainError> {
+    return this.#guard("close", () => this.#queue.close());
   }
 }
+
+export { InvalidArgumentError, LimitError, QueueClosedError } from "../errors.ts";

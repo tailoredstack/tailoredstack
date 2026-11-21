@@ -6,6 +6,7 @@ export type {
   QueueCount,
   Receipt,
 } from "./dialect.ts";
+export { InvalidArgumentError, LimitError, QueueClosedError } from "./errors.ts";
 export type { JobContext } from "./job.ts";
 export { Job } from "./job.ts";
 export { MemoryDialect } from "./memory-dialect.ts";

@@ -93,3 +93,5 @@ jobs:
         run: pnpm --filter @tailoredstack/queue build
       - name: Test ✅
         run: pnpm --filter @tailoredstack/queue test
+      - name: E2E against the packed package 🧪
+        run: pnpm --filter @tailoredstack/queue test:e2e
