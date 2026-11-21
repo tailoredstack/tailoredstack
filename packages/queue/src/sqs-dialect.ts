@@ -17,11 +17,10 @@ export interface SqsDialectOptions {
 // The SDK is an optional peer. Import it on first use so a MemoryDialect or SqliteDialect user never loads it.
 type SqsSdk = typeof import("@aws-sdk/client-sqs");
 
-let sdk: Promise<SqsSdk> | undefined;
-
+// The runtime caches the module, so importing again is cheap, and a failed import is retried on the next call
+// instead of becoming a permanently cached rejection.
 function sqs(): Promise<SqsSdk> {
-  if (sdk === undefined) sdk = import("@aws-sdk/client-sqs");
-  return sdk;
+  return import("@aws-sdk/client-sqs");
 }
 
 const SECOND_MS = 1_000;
@@ -164,7 +163,7 @@ export class SqsDialect implements Dialect {
       await this.#client.send(new DeleteMessageCommand({ QueueUrl: url, ReceiptHandle: split.handle }));
     } catch (error) {
       if (!isStaleReceipt(error)) {
-        this.#restore(split.id, previous);
+        this.#restore(split.id, receipt, previous);
         throw error;
       }
       this.#mark(split.id, receipt, "acknowledged");
@@ -194,7 +193,7 @@ export class SqsDialect implements Dialect {
       );
     } catch (error) {
       if (!isStaleReceipt(error)) {
-        this.#restore(split.id, previous);
+        this.#restore(split.id, receipt, previous);
         throw error;
       }
       this.#mark(split.id, receipt, "released");
@@ -253,12 +252,17 @@ export class SqsDialect implements Dialect {
     return true;
   }
 
-  #restore(id: string, previous: MessageState | undefined): void {
+  // Only undo a claim that still owns the id. A redelivery can replace the settling state while the SQS call is in
+  // flight; restoring the old lease then would make a stale receipt look live again.
+  #restore(id: string, receipt: Receipt, previous: MessageState | undefined): void {
+    if (this.#states.get(id)?.receipt !== receipt) return;
     if (previous === undefined) this.#states.delete(id);
     else this.#states.set(id, previous);
   }
 
   #mark(id: string, receipt: Receipt, status: Exclude<MessageStatus, "leased" | "settling">): void {
+    // Same rule as #restore: never overwrite a newer delivery that arrived while the call was in flight.
+    if (this.#states.get(id)?.receipt !== receipt) return;
     const now = Date.now();
     this.#states.set(id, { receipt, leaseUntil: 0, settledAt: now, status });
     if (status === "acknowledged") {
