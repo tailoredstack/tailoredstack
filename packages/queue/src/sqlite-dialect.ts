@@ -39,6 +39,7 @@ export class SqliteDialect implements Dialect {
   constructor({ path }: SqliteDialectOptions) {
     this.#db = new DatabaseSync(path);
     this.#db.exec("PRAGMA busy_timeout = 5000"); // wait for other processes' write locks instead of failing
+    this.#db.exec("PRAGMA journal_mode = WAL"); // one fsync per commit instead of two; readers never block writers
     this.#db.exec(
       `CREATE TABLE IF NOT EXISTS queue_messages (
         id TEXT PRIMARY KEY,
@@ -50,9 +51,11 @@ export class SqliteDialect implements Dialect {
         receipt TEXT
       )`,
     );
-    this.#db.exec(
-      "CREATE INDEX IF NOT EXISTS queue_messages_ready ON queue_messages (name, available_at, lease_until)",
-    );
+    // (name, available_at) lets dequeue read rows already ordered by due time and rowid, with no sort. A receipt
+    // index keeps acknowledge and release from scanning every live row of the queue.
+    this.#db.exec("CREATE INDEX IF NOT EXISTS queue_messages_due ON queue_messages (name, available_at)");
+    this.#db.exec("CREATE INDEX IF NOT EXISTS queue_messages_receipt ON queue_messages (receipt)");
+    this.#db.exec("DROP INDEX IF EXISTS queue_messages_ready"); // superseded by queue_messages_due
     this.#insert = this.#db.prepare("INSERT INTO queue_messages (id, name, payload, available_at) VALUES (?, ?, ?, ?)");
     this.#next = this.#db.prepare(
       `SELECT id, payload, attempts FROM queue_messages

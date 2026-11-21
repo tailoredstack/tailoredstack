@@ -7,7 +7,7 @@ TypeScript backend tooling in the style of TanStack: small, typed packages with 
 | Package                                  | Status                | Description                                                                                                                                                     |
 | ---------------------------------------- | --------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | [`@tailoredstack/cache`](packages/cache) | 0.1.0 (first release) | One typed cache API over memory, SQLite, and Redis/Valkey stores. TanStack-style array keys, stale-while-revalidate, locks, and O(matches) prefix invalidation. |
-| [`@tailoredstack/queue`](packages/queue) | 0.1.0 (first release) | Typed job queue over injectable dialects (memory, SQLite), modeled on Laravel queues. Note: the SQLite dialect needs `node:sqlite`, so Node 22 users cannot use it. |
+| [`@tailoredstack/queue`](packages/queue) | 0.1.0 (first release) | Typed job queue over injectable dialects (memory, SQLite), modeled on Laravel queues. The SQLite dialect uses `node:sqlite`, so Node 22 users cannot use it. |
 
 ## Install
 
