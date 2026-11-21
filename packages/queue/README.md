@@ -6,6 +6,7 @@ A typed job queue with pluggable dialects, modeled on Laravel queues. The backen
 
 ```sh
 pnpm add @tailoredstack/queue
+pnpm add effect         # only if you use @tailoredstack/queue/effect
 ```
 
 ## Dialects
@@ -93,6 +94,28 @@ const dialect = new RedisDialect({ client, prefix: "billing:" });
 The prefix defaults to `queue:` and namespaces every key, so several dialects can share one Redis. The dialect owns no client connection: `close()` only makes the dialect reject further calls, and the caller closes the client.
 
 Each operation is one Lua script, so two consumers never claim the same message. The dialect targets a single Redis, not a cluster: keys are built inside the scripts. Exact `count()` costs a few O(log n) sorted-set counts plus a scan of expired leases not yet dequeued; `dequeue()` runs the same scan to requeue them.
+
+## Effect
+
+```ts
+import { EffectQueue } from "@tailoredstack/queue/effect";
+import { Effect } from "effect";
+
+const queue = new EffectQueue(
+  new Queue(new RedisDialect({ client: redis, prefix: "billing:" }), {
+    jobs: { sendEmail: SendEmail },
+  }),
+);
+
+const program = Effect.gen(function* () {
+  yield* queue.enqueue(new SendEmail({ to: "ada@example.com" }), { delay: 5_000 });
+  const message = yield* queue.dequeue();
+  if (message) yield* queue.acknowledge(message.receipt);
+  return yield* queue.count();
+});
+```
+
+Every client method returns an `Effect`. Invalid options, unregistered job classes, payload validation, and dialect failures become a tagged `QueueError` carrying the operation and its cause. The `effect` peer is optional, so the core entry still has no Effect dependency.
 
 ## Node version
 

@@ -10,6 +10,10 @@
       "types": "./dist/index.d.ts",
       "default": "./dist/index.js"
     },
+    "./effect": {
+      "types": "./dist/effect/index.d.ts",
+      "default": "./dist/effect/index.js"
+    },
     "./sqs": {
       "types": "./dist/sqs-dialect.d.ts",
       "default": "./dist/sqs-dialect.js"
@@ -31,10 +35,14 @@
   },
   "peerDependencies": {
     "@aws-sdk/client-sqs": "^3.1169.0",
+    "effect": "^4.1.4",
     "ioredis": "^6.0.0"
   },
   "peerDependenciesMeta": {
     "@aws-sdk/client-sqs": {
+      "optional": true
+    },
+    "effect": {
       "optional": true
     },
     "ioredis": {
@@ -44,11 +52,13 @@
   "devDependencies": {
     "@aws-sdk/client-sqs": "^3.1169.0",
     "@biomejs/biome": "^2.6.8",
+    "@effect/vitest": "^4.1.4",
     "@floci/testcontainers": "0.4.0",
     "@testcontainers/redis": "^12.2.1",
     "@testcontainers/valkey": "^12.2.1",
     "@types/node": "^26.6.6",
     "@vitest/coverage-v8": "^5.1.0",
+    "effect": "^4.1.4",
     "ioredis": "^6.0.0",
     "testcontainers": "^12.2.1",
     "typescript": "^7.0.2",
