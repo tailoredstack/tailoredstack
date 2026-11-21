@@ -1,5 +1,5 @@
 import { spawnSync } from "node:child_process";
-import { cpSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { cpSync, existsSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -24,7 +24,7 @@ function run(file: string, args: string[], cwd: string): string {
   return result.stdout;
 }
 
-function installConsumer(entry: string, dependencies: string[]): void {
+function installConsumer(entry: string, dependencies: string[]): string {
   const work = mkdtempSync(join(tmpdir(), `queue-consumer-${entry}-`));
   workDirs.push(work);
   writeFileSync(join(work, "package.json"), JSON.stringify({ name: "consumer", private: true, type: "module" }));
@@ -37,6 +37,7 @@ function installConsumer(entry: string, dependencies: string[]): void {
   cpSync(join(fixtures, "tsconfig.json"), join(work, "tsconfig.json"));
   run(join(work, "node_modules", ".bin", "tsc"), ["-p", "tsconfig.json"], work);
   run("node", [`${entry}.ts`], work);
+  return work;
 }
 
 beforeAll(() => {
@@ -55,11 +56,23 @@ afterAll(() => {
 });
 
 describe("installed @tailoredstack/queue", () => {
+  it("packs a manifest with expanded catalogs and an optional effect peer", () => {
+    const manifest = JSON.parse(run("tar", ["-xzOf", tarball, "package/package.json"], pkgDir)) as {
+      peerDependencies?: Record<string, string>;
+      peerDependenciesMeta?: Record<string, { optional?: boolean }>;
+    };
+    expect(JSON.stringify(manifest)).not.toContain("catalog:");
+    expect(manifest.peerDependencies?.effect).toMatch(/^\^?4\./);
+    expect(manifest.peerDependenciesMeta?.effect?.optional).toBe(true);
+  });
+
   it("typechecks and runs the ./effect entry from the packed tarball", () => {
-    installConsumer("consumer", ["effect@^4"]);
+    const work = installConsumer("consumer", ["effect@^4"]);
+    expect(existsSync(join(work, "node_modules", "effect"))).toBe(true);
   });
 
   it("typechecks and runs the core entry with no effect installed", () => {
-    installConsumer("consumer-core", []);
+    const work = installConsumer("consumer-core", []);
+    expect(existsSync(join(work, "node_modules", "effect"))).toBe(false);
   });
 });

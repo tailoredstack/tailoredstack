@@ -56,6 +56,13 @@ const failingDialect: Dialect = {
 
 const failingQueue = () => new EffectQueue(new Queue(failingDialect, { jobs: { SendMail } }));
 
+const limitedDialect: Dialect = {
+  ...failingDialect,
+  capabilities: { ...capabilities, maxDelayMs: 10, maxLeaseMs: 10 },
+};
+
+const limitedQueue = () => new EffectQueue(new Queue(limitedDialect, { jobs: { SendMail } }));
+
 describe("EffectQueue", () => {
   it.effect("enqueue returns the message id", () =>
     Effect.gen(function* () {
@@ -158,14 +165,57 @@ describe("EffectQueue error passthrough", () => {
     }),
   );
 
-  it.effect("calls after close pass through as QueueClosedError", () =>
+  it.effect("lease and delay limits pass through as LimitError", () =>
+    Effect.gen(function* () {
+      const queue = limitedQueue();
+      const calls: Array<Effect.Effect<unknown, unknown>> = [
+        queue.enqueue(new SendMail({ to: "ada@example.com" }), { delay: 11 }),
+        queue.dequeue(11),
+        queue.release("receipt" as never, { delay: 11 }),
+      ];
+
+      for (const effect of calls) {
+        const error = yield* Effect.flip(effect);
+        expect(error).toBeInstanceOf(LimitError);
+        expect(error).not.toBeInstanceOf(QueueError);
+        expect((error as Error).message).toMatch(/exceeds/);
+      }
+    }),
+  );
+
+  it.effect("every client call after close passes through as QueueClosedError", () =>
     Effect.gen(function* () {
       const queue = make();
       yield* queue.close();
-      const error = yield* Effect.flip(queue.dequeue());
-      expect(error).toBeInstanceOf(QueueClosedError);
-      expect(error).not.toBeInstanceOf(QueueError);
-      expect((error as Error).message).toBe("MemoryDialect is closed");
+      const calls: Array<Effect.Effect<unknown, unknown>> = [
+        queue.enqueue(new SendMail({ to: "ada@example.com" })),
+        queue.dequeue(),
+        queue.acknowledge("receipt" as never),
+        queue.release("receipt" as never),
+        queue.count(),
+      ];
+
+      for (const effect of calls) {
+        const error = yield* Effect.flip(effect);
+        expect(error).toBeInstanceOf(QueueClosedError);
+        expect(error).not.toBeInstanceOf(QueueError);
+        expect((error as Error).message).toBe("MemoryDialect is closed");
+      }
+    }),
+  );
+
+  it.effect("a dialect TypeError becomes a QueueError", () =>
+    Effect.gen(function* () {
+      const typeError = new TypeError("bad number");
+      const dialect: Dialect = {
+        ...failingDialect,
+        count: async () => {
+          throw typeError;
+        },
+      };
+      const error = yield* Effect.flip(new EffectQueue(new Queue(dialect, { jobs: { SendMail } })).count());
+      expect(error).toBeInstanceOf(QueueError);
+      expect((error as QueueError).cause).toBe(typeError);
     }),
   );
 });
