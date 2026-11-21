@@ -418,6 +418,146 @@ describe("SqsDialect unit", () => {
     }
   });
 
+  it("lets only one concurrent acknowledgement of a receipt proceed", async () => {
+    let releaseDelete!: () => void;
+    const gate = new Promise<void>((resolve) => {
+      releaseDelete = resolve;
+    });
+    let deletes = 0;
+    const client = {
+      async send(command: unknown): Promise<unknown> {
+        if (command instanceof CreateQueueCommand) return queueUrl();
+        if (command instanceof ReceiveMessageCommand) {
+          return { Messages: [{ MessageId: "one", ReceiptHandle: "handle", Body: "body" }] };
+        }
+        if (command instanceof DeleteMessageCommand) {
+          deletes += 1;
+          await gate;
+          return {};
+        }
+        throw new Error("unexpected SQS call");
+      },
+    } as unknown as SqsClient;
+    const d = new SqsDialect({ client });
+    const message = await d.dequeue("jobs", { now, leaseUntil: now + 30_000 });
+    if (!message) throw new Error("expected a message");
+
+    const first = d.acknowledge("jobs", message.receipt, now);
+    await vi.waitFor(() => expect(deletes).toBe(1));
+    await expect(d.acknowledge("jobs", message.receipt, now)).resolves.toBe(false);
+    releaseDelete();
+    await expect(first).resolves.toBe(true);
+    expect(deletes).toBe(1);
+  });
+
+  it("restores a live lease when an acknowledgement fails", async () => {
+    let fail = true;
+    const client = {
+      async send(command: unknown): Promise<unknown> {
+        if (command instanceof CreateQueueCommand) return queueUrl();
+        if (command instanceof ReceiveMessageCommand) {
+          return { Messages: [{ MessageId: "one", ReceiptHandle: "handle", Body: "body" }] };
+        }
+        if (command instanceof DeleteMessageCommand) {
+          if (fail) {
+            fail = false;
+            throw sqsError("AccessDenied");
+          }
+          return {};
+        }
+        throw new Error("unexpected SQS call");
+      },
+    } as unknown as SqsClient;
+    const d = new SqsDialect({ client });
+    const message = await d.dequeue("jobs", { now, leaseUntil: now + 30_000 });
+    if (!message) throw new Error("expected a message");
+
+    await expect(d.acknowledge("jobs", message.receipt, now)).rejects.toThrow("AccessDenied");
+    await expect(d.acknowledge("jobs", message.receipt, now)).resolves.toBe(true);
+  });
+
+  it("forgets a settling state for an unknown receipt when the call fails", async () => {
+    let deletes = 0;
+    const client = {
+      async send(command: unknown): Promise<unknown> {
+        if (command instanceof CreateQueueCommand) return queueUrl();
+        if (command instanceof DeleteMessageCommand) {
+          deletes += 1;
+          if (deletes === 1) throw sqsError("AccessDenied");
+          return {};
+        }
+        throw new Error("unexpected SQS call");
+      },
+    } as unknown as SqsClient;
+    const d = new SqsDialect({ client });
+
+    await expect(d.acknowledge("jobs", receipt("remote:handle"), now)).rejects.toThrow("AccessDenied");
+    await expect(d.acknowledge("jobs", receipt("remote:handle"), now)).resolves.toBe(true);
+    expect(deletes).toBe(2);
+  });
+
+  it("returns false when the lease expires between the last check and the acknowledgement claim", async () => {
+    const calls: unknown[] = [];
+    const client = {
+      async send(command: unknown): Promise<unknown> {
+        calls.push(command);
+        if (command instanceof CreateQueueCommand) return queueUrl();
+        if (command instanceof ReceiveMessageCommand) {
+          return { Messages: [{ MessageId: "one", ReceiptHandle: "handle", Body: "body" }] };
+        }
+        throw new Error("unexpected SQS call");
+      },
+    } as unknown as SqsClient;
+    const d = new SqsDialect({ client });
+    const before = Date.now();
+    const message = await d.dequeue("jobs", { now: before, leaseUntil: before + 1_000 });
+    if (!message) throw new Error("expected a message");
+
+    const spy = vi.spyOn(Date, "now");
+    try {
+      spy
+        .mockReturnValueOnce(before)
+        .mockReturnValueOnce(before)
+        .mockReturnValueOnce(before + 60_000);
+      await expect(d.acknowledge("jobs", message.receipt, before)).resolves.toBe(false);
+    } finally {
+      spy.mockRestore();
+    }
+    expect(calls.some((call) => call instanceof DeleteMessageCommand)).toBe(false);
+  });
+
+  it("returns false when the lease expires between the last check and the release claim", async () => {
+    const calls: unknown[] = [];
+    const client = {
+      async send(command: unknown): Promise<unknown> {
+        calls.push(command);
+        if (command instanceof CreateQueueCommand) return queueUrl();
+        if (command instanceof ReceiveMessageCommand) {
+          return { Messages: [{ MessageId: "one", ReceiptHandle: "handle", Body: "body" }] };
+        }
+        throw new Error("unexpected SQS call");
+      },
+    } as unknown as SqsClient;
+    const d = new SqsDialect({ client });
+    const before = Date.now();
+    const message = await d.dequeue("jobs", { now: before, leaseUntil: before + 1_000 });
+    if (!message) throw new Error("expected a message");
+
+    const spy = vi.spyOn(Date, "now");
+    try {
+      spy
+        .mockReturnValueOnce(before)
+        .mockReturnValueOnce(before)
+        .mockReturnValueOnce(before + 60_000);
+      await expect(d.release("jobs", message.receipt, { availableAt: before + 2_000, now: before })).resolves.toBe(
+        false,
+      );
+    } finally {
+      spy.mockRestore();
+    }
+    expect(calls.some((call) => call instanceof ChangeMessageVisibilityCommand)).toBe(false);
+  });
+
   it("rechecks the lease after creating the queue before changing visibility", async () => {
     const calls: unknown[] = [];
     const client = {

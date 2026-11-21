@@ -1,17 +1,27 @@
 import { SQSClient } from "@aws-sdk/client-sqs";
 import { FlociContainer, type StartedFlociContainer } from "@floci/testcontainers";
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { runDialectSuite } from "./dialect-suite.ts";
-import { SqsDialect } from "./sqs-dialect.ts";
+import { SQS_CAPABILITIES, SqsDialect } from "./sqs-dialect.ts";
 
-let floci: StartedFlociContainer;
-let client: SQSClient;
+// A backend-clock dialect spends real seconds on lease expiry and delayed release. Keep the longer timeout local to
+// this file so the rest of the package keeps the default fast-failure budget.
+vi.setConfig({ testTimeout: 30_000 });
+
+// Digest of floci/floci:2.4.0, so a moved tag cannot change what CI runs.
+const FLOCI_IMAGE = "floci/floci@sha256:5ee85db604c4aa74ac76e07ea5cc83086f37bb472bf3dbb97e34019e48efae9c";
+
+let floci: StartedFlociContainer | undefined;
+let client: SQSClient | undefined;
 let instances = 0;
 
-const open = (prefix = `q${++instances}`): SqsDialect => new SqsDialect({ client, queueNamePrefix: prefix });
+const open = (prefix = `q${++instances}`): SqsDialect => {
+  if (!client) throw new Error("SQS client is not ready");
+  return new SqsDialect({ client, queueNamePrefix: prefix });
+};
 
 beforeAll(async () => {
-  floci = await new FlociContainer("floci/floci:2.4.0").withoutDockerSocket().start();
+  floci = await new FlociContainer(FLOCI_IMAGE).withoutDockerSocket().start();
   client = new SQSClient({
     endpoint: floci.getEndpoint(),
     region: floci.getRegion(),
@@ -23,15 +33,15 @@ beforeAll(async () => {
 }, 120_000);
 
 afterAll(async () => {
-  client.destroy();
-  await floci.stop();
+  client?.destroy();
+  await floci?.stop();
 });
 
 describe("SqsDialect", () => {
-  runDialectSuite("SqsDialect", open);
+  runDialectSuite("SqsDialect", open, SQS_CAPABILITIES);
 
   it("declares no order, approximate counts, a backend clock, and SQS delay and lease caps", () => {
-    expect(open().capabilities).toEqual({
+    expect(SQS_CAPABILITIES).toEqual({
       ordered: false,
       exactCounts: false,
       clockSource: "backend",
