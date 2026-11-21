@@ -1,5 +1,10 @@
 packages:
   - "packages/*"
+
+catalog:
+  "@effect/vitest": ^4.1.4
+  effect: ^4.1.4
+
 allowBuilds:
   cpu-features: false
   protobufjs: false

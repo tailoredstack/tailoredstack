@@ -27,7 +27,7 @@
     "dist"
   ],
   "peerDependencies": {
-    "effect": "^4.1.4",
+    "effect": "catalog:",
     "ioredis": "^6.0.0",
     "vitest": "^5.1.0"
   },
@@ -52,11 +52,11 @@
   },
   "devDependencies": {
     "@biomejs/biome": "^2.6.8",
-    "@effect/vitest": "^4.1.4",
+    "@effect/vitest": "catalog:",
     "@testcontainers/redis": "^12.2.1",
     "@testcontainers/valkey": "^12.2.1",
     "@types/node": "^26.6.6",
-    "effect": "^4.1.4",
+    "effect": "catalog:",
     "ioredis": "^6.0.0",
     "typescript": "^7.0.2",
     "vitest": "^5.1.0"
