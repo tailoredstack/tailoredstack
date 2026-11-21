@@ -70,6 +70,16 @@ describe("EffectQueue", () => {
     }),
   );
 
+  it.effect("methods are lazy: nothing happens until the Effect runs", () =>
+    Effect.gen(function* () {
+      const queue = make();
+      const pending = queue.enqueue(new SendMail({ to: "ada@example.com" }));
+      expect(yield* queue.count()).toEqual({ ready: 0, delayed: 0, reserved: 0 });
+      yield* pending;
+      expect(yield* queue.count()).toEqual({ ready: 1, delayed: 0, reserved: 0 });
+    }),
+  );
+
   it.effect("dequeue yields null until the delay passes, then the leased message", () =>
     Effect.gen(function* () {
       let now = 1_000;
