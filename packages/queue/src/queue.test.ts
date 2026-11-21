@@ -24,7 +24,6 @@ class ResizeImage extends Job<ResizeImagePayload> {
   async handle(_ctx: JobContext<unknown>): Promise<void> {}
 }
 
-// Same shape as SendMail, never registered, no brand.
 class Rogue extends Job<SendMailPayload> {
   async handle(_ctx: JobContext<unknown>): Promise<void> {}
 }
@@ -58,7 +57,6 @@ function mailQueue(dialect: Dialect, now?: () => number, queue?: string) {
   return new Queue(dialect, { jobs: { SendMail, ResizeImage }, now, queue });
 }
 
-/** Builds a `to` string so the serialized SendMail payload is exactly `totalBytes` UTF-8 bytes. */
 function mailOfBytes(totalBytes: number, multiByte: boolean): SendMail {
   const overhead = Buffer.byteLength(JSON.stringify({ job: "SendMail", payload: { to: "" } }), "utf8");
   const room = totalBytes - overhead;
@@ -171,7 +169,6 @@ describe("Queue", () => {
     it("counts a multi-byte envelope by UTF-8 bytes, not characters", async () => {
       const { dialect, enqueue } = fakeDialect();
       const queue = mailQueue(dialect, () => 0);
-      // Fewer than 262144 characters, but over 262144 bytes.
       const overhead = Buffer.byteLength(JSON.stringify({ job: "SendMail", payload: { to: "" } }), "utf8");
       const job = new SendMail({ to: "é".repeat(Math.ceil((MAX_PAYLOAD_BYTES - overhead) / 2) + 1) });
       await expect(queue.enqueue(job)).rejects.toThrow();
@@ -357,7 +354,6 @@ describe("Queue", () => {
 
   describe("compile-time checks", () => {
     it("declares the compile-time checks (type-checked only, never invoked)", () => {
-      // Nothing here runs: the function exists so tsc checks each @ts-expect-error line.
       const compileOnly = (dialect: Dialect) => {
         // @ts-expect-error Rogue has no __jobKey brand and is not registered
         new Queue(dialect, { jobs: { SendMail, Rogue } });

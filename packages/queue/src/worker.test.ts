@@ -251,7 +251,6 @@ describe("Worker", () => {
 
   describe("compile-time checks", () => {
     it("rejects wrong context types and bad handle shapes", () => {
-      // Nothing here runs: the function exists so tsc checks each @ts-expect-error line.
       const compileOnly = (dialect: Dialect) => {
         // @ts-expect-error context.tenant must be a string, not a number
         new Worker({ dialect, jobs, context: { tenant: 1 } });

@@ -16,7 +16,6 @@ interface AppContext {
 
 const context: AppContext = { tenant: "acme" };
 
-/** Fails with the same error object every run, so tests can assert identity. */
 const boom = new Error("boom");
 let failuresLeft = Number.POSITIVE_INFINITY;
 const runs: string[] = [];
@@ -92,13 +91,13 @@ describe("Worker retry", () => {
     const h = await setup();
     const worker = workerFor(h, { tries: 4 });
 
-    await expect(worker.processOne()).rejects.toBe(boom); // attempt 1 at t=0, wait 1000
+    await expect(worker.processOne()).rejects.toBe(boom);
     h.clock.now = 1_000;
-    await expect(worker.processOne()).rejects.toBe(boom); // attempt 2 at t=1000, wait 2000
+    await expect(worker.processOne()).rejects.toBe(boom);
     await expect(h.dialect.count("default", 2_999)).resolves.toEqual({ ready: 0, delayed: 1, reserved: 0 });
     h.clock.now = 3_000;
     await expect(h.dialect.count("default", 3_000)).resolves.toEqual({ ready: 1, delayed: 0, reserved: 0 });
-    await expect(worker.processOne()).rejects.toBe(boom); // attempt 3 at t=3000, wait 4000
+    await expect(worker.processOne()).rejects.toBe(boom);
     await expect(h.dialect.count("default", 6_999)).resolves.toEqual({ ready: 0, delayed: 1, reserved: 0 });
     h.clock.now = 7_000;
     await expect(h.dialect.count("default", 7_000)).resolves.toEqual({ ready: 1, delayed: 0, reserved: 0 });
@@ -120,7 +119,7 @@ describe("Worker retry", () => {
       h.clock.now += wait;
       await expect(h.dialect.count("default", h.clock.now)).resolves.toEqual({ ready: 1, delayed: 0, reserved: 0 });
     }
-    await expect(worker.processOne()).rejects.toBe(boom); // attempt 5 is the last: dropped
+    await expect(worker.processOne()).rejects.toBe(boom);
     await expect(h.dialect.count("default", 1_000_000)).resolves.toEqual({ ready: 0, delayed: 0, reserved: 0 });
   });
 
@@ -262,7 +261,6 @@ describe("Worker retry", () => {
 
   describe("compile-time checks", () => {
     it("types tries and backoff options as numbers", () => {
-      // Nothing here runs: the function exists so tsc checks each @ts-expect-error line.
       const compileOnly = (dialect: Dialect) => {
         // @ts-expect-error tries must be a number, not a string
         new Worker({ dialect, jobs, context, tries: "3" });
