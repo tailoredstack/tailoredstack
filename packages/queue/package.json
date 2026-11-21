@@ -9,6 +9,10 @@
     ".": {
       "types": "./dist/index.d.ts",
       "default": "./dist/index.js"
+    },
+    "./sqs": {
+      "types": "./dist/sqs-dialect.d.ts",
+      "default": "./dist/sqs-dialect.js"
     }
   },
   "publishConfig": {

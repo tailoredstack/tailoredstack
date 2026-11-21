@@ -27,7 +27,13 @@ function sqs(): Promise<SqsSdk> {
 const SECOND_MS = 1_000;
 const MAX_DELAY_SECONDS = 900;
 const MAX_LEASE_SECONDS = 43_200;
-const SETTLED_LIMIT = 1_024;
+// Acknowledged tombstones are bounded. Dropping the oldest only lets a very late retry of an already-deleted message
+// return true; it can never delete a live message.
+const ACKNOWLEDGED_LIMIT = 1_024;
+// SQS keeps a message for at most 14 days. Keep a margin past that window before forgetting a settled id, so the
+// message it referred to can no longer be redelivered.
+const RETAINED_MS = 15 * 24 * 60 * 60 * 1_000;
+const SWEEP_EVERY = 1_024;
 const STALE_RECEIPT_CODES: Record<string, true> = {
   ReceiptHandleIsInvalid: true,
   MessageNotInflight: true,
@@ -53,9 +59,13 @@ function splitReceipt(receipt: Receipt): { id: string; handle: string } | null {
   return { id: receipt.slice(0, separator), handle: receipt.slice(separator + 1) };
 }
 
-interface Lease {
-  readonly id: string;
+type MessageStatus = "leased" | "released" | "acknowledged" | "expired";
+
+interface MessageState {
+  readonly receipt: Receipt;
   readonly leaseUntil: number;
+  readonly settledAt: number;
+  readonly status: MessageStatus;
 }
 
 export class SqsDialect implements Dialect {
@@ -70,9 +80,12 @@ export class SqsDialect implements Dialect {
   readonly #client: SqsClient;
   readonly #prefix: string;
   readonly #urls = new Map<string, Promise<string>>();
-  readonly #leases = new Map<Receipt, Lease>();
-  readonly #current = new Map<string, Receipt>();
-  readonly #settled = new Set<Receipt>();
+  // One state per message id, not per delivery. A receipt that is not the latest for its id is stale, so no receipt
+  // from an earlier delivery can ever be treated as unknown and passed to SQS, which would delete a live message.
+  readonly #states = new Map<string, MessageState>();
+  // Ids whose latest receipt was acknowledged. Only these tombstones are bounded: forgetting one is safe.
+  readonly #acknowledged = new Map<string, Receipt>();
+  #marks = 0;
   #closed = false;
 
   constructor({ client, queueNamePrefix = "queue" }: SqsDialectOptions) {
@@ -122,15 +135,13 @@ export class SqsDialect implements Dialect {
     if (id === undefined || handle === undefined) {
       throw new Error(`SQS returned a message without an id or receipt handle on queue ${name}`);
     }
+    if (message.Body === undefined) throw new Error(`SQS returned a message without a body on queue ${name}`);
     const receipt = `${id}:${handle}` as Receipt;
-    const previous = this.#current.get(id);
-    if (previous !== undefined) this.#settle(id, previous);
     // The backend owns the lease: record the visibility SQS actually granted, not the caller's timestamp.
-    this.#leases.set(receipt, { id, leaseUntil: now + leaseSeconds * SECOND_MS });
-    this.#current.set(id, receipt);
+    this.#lease(id, receipt, now + leaseSeconds * SECOND_MS);
     return {
       id,
-      payload: message.Body ?? "",
+      payload: message.Body,
       attempts: Number(message.Attributes?.ApproximateReceiveCount ?? "1"),
       receipt,
     };
@@ -140,17 +151,19 @@ export class SqsDialect implements Dialect {
     this.#assertOpen();
     const split = splitReceipt(receipt);
     if (split === null) return false;
-    if (this.#isSettled(receipt, Date.now())) return false;
+    if (this.#isSettled(split.id, receipt, Date.now())) return false;
     const { DeleteMessageCommand } = await sqs();
     const url = await this.#queueUrl(name);
+    // Queue creation and the cache miss can take long enough for the lease to expire after the first check.
+    if (this.#isSettled(split.id, receipt, Date.now())) return false;
     try {
       await this.#client.send(new DeleteMessageCommand({ QueueUrl: url, ReceiptHandle: split.handle }));
     } catch (error) {
       if (!isStaleReceipt(error)) throw error;
-      this.#settle(split.id, receipt);
+      this.#mark(split.id, receipt, "acknowledged");
       return false;
     }
-    this.#settle(split.id, receipt);
+    this.#mark(split.id, receipt, "acknowledged");
     return true;
   }
 
@@ -158,23 +171,24 @@ export class SqsDialect implements Dialect {
     this.#assertOpen();
     const split = splitReceipt(receipt);
     if (split === null) return false;
-    if (this.#isSettled(receipt, Date.now())) return false;
+    if (this.#isSettled(split.id, receipt, Date.now())) return false;
     const { ChangeMessageVisibilityCommand } = await sqs();
     const url = await this.#queueUrl(name);
+    if (this.#isSettled(split.id, receipt, Date.now())) return false;
     try {
       await this.#client.send(
         new ChangeMessageVisibilityCommand({
           QueueUrl: url,
           ReceiptHandle: split.handle,
-          VisibilityTimeout: secondsUntil(at.availableAt, Date.now(), MAX_LEASE_SECONDS),
+          VisibilityTimeout: secondsUntil(at.availableAt, Date.now(), MAX_DELAY_SECONDS),
         }),
       );
     } catch (error) {
       if (!isStaleReceipt(error)) throw error;
-      this.#settle(split.id, receipt);
+      this.#mark(split.id, receipt, "released");
       return false;
     }
-    this.#settle(split.id, receipt);
+    this.#mark(split.id, receipt, "released");
     return true;
   }
 
@@ -193,6 +207,8 @@ export class SqsDialect implements Dialect {
       }),
     );
     const attributes = reply.Attributes ?? {};
+    // SQS cannot tell an in-flight message from one released with a visibility delay, so both are reported as
+    // reserved rather than delayed. `exactCounts: false` covers the approximation.
     return {
       ready: parseCount(attributes.ApproximateNumberOfMessages),
       delayed: parseCount(attributes.ApproximateNumberOfMessagesDelayed),
@@ -204,24 +220,56 @@ export class SqsDialect implements Dialect {
     this.#closed = true;
   }
 
-  // A lease this instance handed out stays authoritative until it expires: SQS accepts a delete with an old handle, so
-  // without this check a stale receipt could remove a message another consumer now holds.
-  #isSettled(receipt: Receipt, now: number): boolean {
-    const lease = this.#leases.get(receipt);
-    if (lease === undefined) return this.#settled.has(receipt);
-    if (lease.leaseUntil > now) return false;
-    this.#settle(lease.id, receipt);
-    return true;
+  #lease(id: string, receipt: Receipt, leaseUntil: number): void {
+    this.#acknowledged.delete(id);
+    this.#states.set(id, { receipt, leaseUntil, settledAt: 0, status: "leased" });
   }
 
-  #settle(id: string, receipt: Receipt): void {
-    this.#leases.delete(receipt);
-    if (this.#current.get(id) === receipt) this.#current.delete(id);
-    this.#settled.add(receipt);
-    if (this.#settled.size > SETTLED_LIMIT) {
-      const [oldest] = this.#settled;
-      this.#settled.delete(oldest);
+  #mark(id: string, receipt: Receipt, status: Exclude<MessageStatus, "leased">): void {
+    const now = Date.now();
+    this.#states.set(id, { receipt, leaseUntil: 0, settledAt: now, status });
+    if (status === "acknowledged") {
+      this.#acknowledged.set(id, receipt);
+      if (this.#acknowledged.size > ACKNOWLEDGED_LIMIT) {
+        for (const oldestId of this.#acknowledged.keys()) {
+          this.#acknowledged.delete(oldestId);
+          // An id leaves #acknowledged before its state can be leased or released again, so this deletes a tombstone.
+          this.#states.delete(oldestId);
+          break;
+        }
+      }
+    } else {
+      this.#acknowledged.delete(id);
     }
+    this.#marks += 1;
+    if (this.#marks >= SWEEP_EVERY) {
+      this.#marks = 0;
+      this.#sweep(now);
+    }
+  }
+
+  // Released and expired state is not bounded by count, because forgetting it could let a stale receipt reach SQS.
+  // It is bounded by time instead: after SQS retention the message is gone, so the state can go with it.
+  #sweep(now: number): void {
+    for (const [id, state] of this.#states) {
+      if (state.status === "leased") continue;
+      if (now - state.settledAt < RETAINED_MS) continue;
+      this.#states.delete(id);
+      this.#acknowledged.delete(id);
+    }
+  }
+
+  // A receipt is settled when it is not the latest one this instance handed out for its message id, when the message
+  // was already settled, or when the lease expired. SQS accepts deletes and visibility changes with old handles, so
+  // this check must run before either call.
+  #isSettled(id: string, receipt: Receipt, now: number): boolean {
+    const state = this.#states.get(id);
+    if (state === undefined) return false;
+    if (state.receipt !== receipt) return true;
+    if (state.status !== "leased") return true;
+    if (state.leaseUntil > now) return false;
+    this.#mark(id, receipt, "expired");
+    return true;
   }
 
   #queueUrl(name: string): Promise<string> {

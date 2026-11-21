@@ -54,6 +54,39 @@ describe("SqsDialect", () => {
       .toEqual({ ready: 1, delayed: 1, reserved: 1 });
   });
 
+  it("keeps different queue names on different SQS queues", async () => {
+    const d = open();
+    const now = Date.now();
+    await d.enqueue("alpha", "a", { availableAt: now, now });
+
+    await expect(d.dequeue("beta", { now, leaseUntil: now + 30_000 })).resolves.toBeNull();
+    expect(await d.count("beta", now)).toEqual({ ready: 0, delayed: 0, reserved: 0 });
+    expect((await d.dequeue("alpha", { now, leaseUntil: now + 30_000 }))?.payload).toBe("a");
+  });
+
+  it("hides an enqueued message until its delay", async () => {
+    const d = open();
+    const now = Date.now();
+    await d.enqueue("delayed", "later", { availableAt: now + 1_000, now });
+    await expect(d.dequeue("delayed", { now, leaseUntil: now + 30_000 })).resolves.toBeNull();
+
+    await new Promise((resolve) => setTimeout(resolve, 2_200));
+    expect((await d.dequeue("delayed", { now: Date.now(), leaseUntil: Date.now() + 30_000 }))?.payload).toBe("later");
+  });
+
+  it("reports a delayed release in the SQS visibility bucket", async () => {
+    const d = open();
+    const now = Date.now();
+    await d.enqueue("releases", "held", { availableAt: now, now });
+    const message = await d.dequeue("releases", { now, leaseUntil: now + 30_000 });
+    if (!message) throw new Error("expected a message");
+
+    await d.release("releases", message.receipt, { availableAt: now + 60_000, now });
+    await expect
+      .poll(() => d.count("releases", Date.now()), { timeout: 10_000, interval: 100 })
+      .toEqual({ ready: 0, delayed: 0, reserved: 1 });
+  });
+
   it("lets a second instance on the same prefix consume and settle a message", async () => {
     const producer = open("shared");
     const consumer = open("shared");
