@@ -22,8 +22,8 @@
     "build": "tsc -p tsconfig.json",
     "test": "vitest run --coverage",
     "typecheck": "tsc -p tsconfig.test.json",
-    "lint": "biome check src vitest.config.ts",
-    "lint:fix": "biome check --write src vitest.config.ts"
+    "lint": "biome check src test vitest.config.ts",
+    "lint:fix": "biome check --write src test vitest.config.ts"
   },
   "peerDependencies": {
     "@aws-sdk/client-sqs": "^3.1169.0",
