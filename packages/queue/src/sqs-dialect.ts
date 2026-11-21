@@ -59,7 +59,7 @@ function splitReceipt(receipt: Receipt): { id: string; handle: string } | null {
   return { id: receipt.slice(0, separator), handle: receipt.slice(separator + 1) };
 }
 
-type MessageStatus = "leased" | "released" | "acknowledged" | "expired";
+type MessageStatus = "leased" | "settling" | "released" | "acknowledged" | "expired";
 
 interface MessageState {
   readonly receipt: Receipt;
@@ -68,14 +68,16 @@ interface MessageState {
   readonly status: MessageStatus;
 }
 
+export const SQS_CAPABILITIES: DialectCapabilities = Object.freeze({
+  ordered: false,
+  exactCounts: false,
+  clockSource: "backend",
+  maxDelayMs: MAX_DELAY_SECONDS * SECOND_MS,
+  maxLeaseMs: MAX_LEASE_SECONDS * SECOND_MS,
+});
+
 export class SqsDialect implements Dialect {
-  readonly capabilities: DialectCapabilities = {
-    ordered: false,
-    exactCounts: false,
-    clockSource: "backend",
-    maxDelayMs: MAX_DELAY_SECONDS * SECOND_MS,
-    maxLeaseMs: MAX_LEASE_SECONDS * SECOND_MS,
-  };
+  readonly capabilities: DialectCapabilities = SQS_CAPABILITIES;
 
   readonly #client: SqsClient;
   readonly #prefix: string;
@@ -156,10 +158,15 @@ export class SqsDialect implements Dialect {
     const url = await this.#queueUrl(name);
     // Queue creation and the cache miss can take long enough for the lease to expire after the first check.
     if (this.#isSettled(split.id, receipt, Date.now())) return false;
+    const previous = this.#states.get(split.id);
+    if (!this.#claim(split.id, receipt, Date.now())) return false;
     try {
       await this.#client.send(new DeleteMessageCommand({ QueueUrl: url, ReceiptHandle: split.handle }));
     } catch (error) {
-      if (!isStaleReceipt(error)) throw error;
+      if (!isStaleReceipt(error)) {
+        this.#restore(split.id, previous);
+        throw error;
+      }
       this.#mark(split.id, receipt, "acknowledged");
       return false;
     }
@@ -175,6 +182,8 @@ export class SqsDialect implements Dialect {
     const { ChangeMessageVisibilityCommand } = await sqs();
     const url = await this.#queueUrl(name);
     if (this.#isSettled(split.id, receipt, Date.now())) return false;
+    const previous = this.#states.get(split.id);
+    if (!this.#claim(split.id, receipt, Date.now())) return false;
     try {
       await this.#client.send(
         new ChangeMessageVisibilityCommand({
@@ -184,7 +193,10 @@ export class SqsDialect implements Dialect {
         }),
       );
     } catch (error) {
-      if (!isStaleReceipt(error)) throw error;
+      if (!isStaleReceipt(error)) {
+        this.#restore(split.id, previous);
+        throw error;
+      }
       this.#mark(split.id, receipt, "released");
       return false;
     }
@@ -225,7 +237,28 @@ export class SqsDialect implements Dialect {
     this.#states.set(id, { receipt, leaseUntil, settledAt: 0, status: "leased" });
   }
 
-  #mark(id: string, receipt: Receipt, status: Exclude<MessageStatus, "leased">): void {
+  // Claiming happens synchronously, after the last check and before the first await, so a second call with the same
+  // receipt sees "settling" and returns false instead of sending a second delete or visibility change.
+  #claim(id: string, receipt: Receipt, now: number): boolean {
+    const state = this.#states.get(id);
+    if (state === undefined) {
+      this.#states.set(id, { receipt, leaseUntil: 0, settledAt: now, status: "settling" });
+      return true;
+    }
+    if (state.leaseUntil <= now) {
+      this.#mark(id, receipt, "expired");
+      return false;
+    }
+    this.#states.set(id, { ...state, receipt, settledAt: now, status: "settling" });
+    return true;
+  }
+
+  #restore(id: string, previous: MessageState | undefined): void {
+    if (previous === undefined) this.#states.delete(id);
+    else this.#states.set(id, previous);
+  }
+
+  #mark(id: string, receipt: Receipt, status: Exclude<MessageStatus, "leased" | "settling">): void {
     const now = Date.now();
     this.#states.set(id, { receipt, leaseUntil: 0, settledAt: now, status });
     if (status === "acknowledged") {

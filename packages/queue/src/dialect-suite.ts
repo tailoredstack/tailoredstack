@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import type { ClockSource, Dialect } from "./dialect.ts";
+import type { ClockSource, Dialect, DialectCapabilities } from "./dialect.ts";
 
 export function exactCountsSkipTitle(title: string, name: string): string {
   return `${title} [skipped: ${name} declares capabilities.exactCounts=false]`;
@@ -50,13 +50,13 @@ function suiteClock(source: ClockSource): SuiteClock {
   };
 }
 
-export function runDialectSuite(name: string, create: () => Dialect): void {
+export function runDialectSuite(name: string, create: () => Dialect, capabilities?: DialectCapabilities): void {
   describe(`Dialect suite: ${name}`, () => {
-    const { capabilities } = create();
-    const clock = suiteClock(capabilities.clockSource);
+    const caps = capabilities ?? create().capabilities;
+    const clock = suiteClock(caps.clockSource);
 
     const exact = (title: string, body: () => Promise<void>): void => {
-      if (capabilities.exactCounts) {
+      if (caps.exactCounts) {
         it(title, body);
       } else {
         it.skip(exactCountsSkipTitle(title, name), body);
@@ -64,7 +64,7 @@ export function runDialectSuite(name: string, create: () => Dialect): void {
     };
 
     const ordered = (title: string, body: () => Promise<void>): void => {
-      if (capabilities.ordered) {
+      if (caps.ordered) {
         it(title, body);
       } else {
         it.skip(orderedSkipTitle(title, name), body);

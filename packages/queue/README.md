@@ -115,7 +115,7 @@ Each operation is one Lua script, so two consumers never claim the same message.
 pnpm --filter @tailoredstack/queue test
 ```
 
-The SQLite shared suite and the cross-process SQLite lock test run against real files and need no Docker. The Redis test starts `redis:8-alpine` through testcontainers; set `REDIS_URL` to reuse an already-running server instead, for example `REDIS_URL=redis://127.0.0.1:6379 pnpm --filter @tailoredstack/queue test`. `SqsDialect` runs the same suite against `floci/floci:2.4.0` through testcontainers, so its test file needs Docker. The suite adapts to a dialect's clock: `clockSource: 'caller'` dialects run on a synthetic timeline, while `clockSource: 'backend'` dialects use real, whole-second waits and the order case prints a named skip when `ordered` is false.
+The SQLite shared suite and the cross-process SQLite lock test run against real files and need no Docker. The Redis test starts `redis:8-alpine` through testcontainers; set `REDIS_URL` to reuse an already-running server instead, for example `REDIS_URL=redis://127.0.0.1:6379 pnpm --filter @tailoredstack/queue test`. `SqsDialect` runs the same suite against a digest-pinned `floci/floci:2.4.0` through testcontainers, so its test file needs Docker. The suite adapts to a dialect's clock: `clockSource: 'caller'` dialects run on a synthetic timeline, while `clockSource: 'backend'` dialects use real, whole-second waits and the order case prints a named skip when `ordered` is false.
 
 ## License
 
