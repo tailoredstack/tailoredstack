@@ -10,13 +10,14 @@ pnpm add @tailoredstack/queue
 
 ## Dialects
 
-| Dialect         | Storage                       | Ordering          | Exact counts | Delay / lease caps |
-| --------------- | ----------------------------- | ----------------- | ------------ | ------------------ |
-| `MemoryDialect` | process memory                | earliest due first | yes         | none               |
-| `SqliteDialect` | a SQLite file (`node:sqlite`) | earliest due first | yes         | none               |
-| `RedisDialect`  | Redis                         | earliest due first | yes         | none               |
+| Dialect         | Storage                       | Ordering           | Exact counts | Delay / lease caps |
+| --------------- | ----------------------------- | ------------------ | ------------ | ------------------ |
+| `MemoryDialect` | process memory                | earliest due first | yes          | none               |
+| `SqliteDialect` | a SQLite file (`node:sqlite`) | earliest due first | yes          | none               |
+| `RedisDialect`  | Redis                         | earliest due first | yes          | none               |
+| `SqsDialect`    | an SQS queue                  | best effort        | no           | 900 s / 12 h       |
 
-"Earliest due first" means a job becomes claimable at `availableAt` (now, plus any delay) and the dialect serves the smallest `availableAt`; jobs whose delay expires earlier are served before jobs enqueued earlier. Ties keep insertion order.
+"Earliest due first" means a job becomes claimable at `availableAt` (now, plus any delay) and the dialect serves the smallest `availableAt`; jobs whose delay expires earlier are served before jobs enqueued earlier. Ties keep insertion order. SQS standard queues do not promise that order, so `SqsDialect` declares `ordered: false` instead of sorting messages locally to fake it.
 
 ```ts
 import { Job, Queue, SqliteDialect } from "@tailoredstack/queue";
@@ -40,6 +41,22 @@ if (message) await queue.acknowledge(message.receipt);
 ```
 
 Swap `new SqliteDialect({ path: "./queue.db" })` for `new MemoryDialect()` to run the same code in one process with no file.
+
+### SQS
+
+`SqsDialect` uses `@aws-sdk/client-sqs`, an optional peer, and a client you own. The dialect creates one queue per queue name, named `<prefix>-<sha256(name) first 32 hex>`; the prefix defaults to `queue` and may be at most 47 characters. Supply a different prefix to namespace several applications in one account.
+
+```ts
+import { SQSClient } from "@aws-sdk/client-sqs";
+import { Queue, SqsDialect } from "@tailoredstack/queue";
+
+const client = new SQSClient({ region: "us-east-1" });
+const queue = new Queue(new SqsDialect({ client, queueNamePrefix: "billing" }), {
+  jobs: { sendEmail: SendEmail },
+});
+```
+
+SQS has a backend clock: `now` arguments are ignored and its own seconds-granular clock decides when a delayed or leased message is visible. Delays are capped at 900 s and leases at 12 h; counts come from `GetQueueAttributes` and are approximate. The dialect keeps a small in-process ledger of the receipts it handed out so a stale or already-settled receipt returns `false` instead of deleting a message another consumer now holds. Receipts from another process are unknown to the ledger and are passed to SQS directly. `close()` does not destroy the client.
 
 The SQLite dialect owns one table in the file, `queue_messages` by default. Pass `table` to namespace several queues inside one database:
 
@@ -77,7 +94,7 @@ Each operation is one Lua script, so two consumers never claim the same message.
 ## Limits
 
 - **Blocking:** `node:sqlite` is synchronous. A contended write can block the event loop for up to the 5 s `busy_timeout`, so run queue work in its own process if you also serve latency-sensitive requests there.
-- **One host:** SQLite plus WAL is fine for many processes on one machine. For several hosts use `RedisDialect` (or the planned SQS dialect) instead. WAL needs a local filesystem, not NFS/SMB.
+- **One host:** SQLite plus WAL is fine for many processes on one machine. For several hosts use `RedisDialect` or `SqsDialect` instead. WAL needs a local filesystem, not NFS/SMB.
 - **Pass a file path.** `path: ":memory:"` gives every dialect instance its own private database, so two dialects never see each other's jobs.
 - **Counts scan per queue name:** exact `count()` touches the rows of that name. Many queue names in one file are fine; a huge backlog makes counts proportionally costlier.
 - **Schema:** the dialect owns its table (`table`, default `queue_messages`) and migrates it on construction (`CREATE TABLE/INDEX IF NOT EXISTS`). Point it at a file whose schema is managed elsewhere and it will still create its own table; it never touches tables it does not own.
@@ -89,7 +106,7 @@ Each operation is one Lua script, so two consumers never claim the same message.
 pnpm --filter @tailoredstack/queue test
 ```
 
-The SQLite shared suite and the cross-process SQLite lock test run against real files and need no Docker. The Redis test starts `redis:8-alpine` through testcontainers; set `REDIS_URL` to reuse an already-running server instead, for example `REDIS_URL=redis://127.0.0.1:6379 pnpm --filter @tailoredstack/queue test`.
+The SQLite shared suite and the cross-process SQLite lock test run against real files and need no Docker. The Redis test starts `redis:8-alpine` through testcontainers; set `REDIS_URL` to reuse an already-running server instead, for example `REDIS_URL=redis://127.0.0.1:6379 pnpm --filter @tailoredstack/queue test`. `SqsDialect` runs the same suite against `floci/floci:2.4.0` through testcontainers, so its test file needs Docker. The suite adapts to a dialect's clock: `clockSource: 'caller'` dialects run on a synthetic timeline, while `clockSource: 'backend'` dialects use real, whole-second waits and the order case prints a named skip when `ordered` is false.
 
 ## License
 

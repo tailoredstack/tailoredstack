@@ -15,5 +15,7 @@ export type { RedisClient, RedisDialectOptions } from "./redis-dialect.ts";
 export { RedisDialect } from "./redis-dialect.ts";
 export type { SqliteDialectOptions } from "./sqlite-dialect.ts";
 export { SqliteDialect } from "./sqlite-dialect.ts";
+export type { SqsDialectOptions } from "./sqs-dialect.ts";
+export { SqsDialect } from "./sqs-dialect.ts";
 export type { RegistryContext, WorkerOptions } from "./worker.ts";
 export { JobTimeoutError, Worker } from "./worker.ts";
