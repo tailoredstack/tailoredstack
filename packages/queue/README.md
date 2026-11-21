@@ -44,11 +44,16 @@ Swap `new SqliteDialect({ path: "./queue.db" })` for `new MemoryDialect()` to ru
 
 ### SQS
 
-`SqsDialect` uses `@aws-sdk/client-sqs`, an optional peer, and a client you own. The dialect creates one queue per queue name, named `<prefix>-<sha256(name) first 32 hex>`; the prefix defaults to `queue` and may be at most 47 characters. Supply a different prefix to namespace several applications in one account.
+SQS lives behind its own subpath so the optional `@aws-sdk/client-sqs` peer is only required when you import it. Install both packages and keep a client you own:
+
+```sh
+pnpm add @tailoredstack/queue @aws-sdk/client-sqs
+```
 
 ```ts
 import { SQSClient } from "@aws-sdk/client-sqs";
-import { Queue, SqsDialect } from "@tailoredstack/queue";
+import { Queue } from "@tailoredstack/queue";
+import { SqsDialect } from "@tailoredstack/queue/sqs";
 
 const client = new SQSClient({ region: "us-east-1" });
 const queue = new Queue(new SqsDialect({ client, queueNamePrefix: "billing" }), {
@@ -56,7 +61,11 @@ const queue = new Queue(new SqsDialect({ client, queueNamePrefix: "billing" }), 
 });
 ```
 
-SQS has a backend clock: `now` arguments are ignored and its own seconds-granular clock decides when a delayed or leased message is visible. Delays are capped at 900 s and leases at 12 h; counts come from `GetQueueAttributes` and are approximate. The dialect keeps a small in-process ledger of the receipts it handed out so a stale or already-settled receipt returns `false` instead of deleting a message another consumer now holds. Receipts from another process are unknown to the ledger and are passed to SQS directly. `close()` does not destroy the client.
+The dialect creates one queue per queue name, named `<prefix>-<sha256(name) first 32 hex>`; the prefix defaults to `queue` and may be at most 47 characters. Supply a different prefix to namespace several applications in one account.
+
+SQS has a backend clock: `now` arguments are ignored and its own seconds-granular clock decides when a delayed or leased message is visible. Delays are capped at 900 s and leases at 12 h. `count()` comes from `GetQueueAttributes` and is approximate; SQS cannot distinguish an in-flight message from one released with a visibility delay, so both are reported in `reserved` instead of `delayed`.
+
+The dialect keeps a per-message, in-process ledger so a stale, settled, or expired-lease receipt returns `false` instead of deleting a message another consumer now holds. A receipt is stale when it is not the latest one this instance handed out for its message. Acknowledged tombstones are bounded (the oldest is forgotten first, which can only let a very late retry of an already-deleted message report `true`). Released and expired state is kept until that message is received or settled again, and swept after a 15-day window, past the 14-day SQS maximum. Receipts from another process, and receipts after a restart, are unknown to the ledger and are passed to SQS directly, so the protection is same-instance and best effort. `close()` does not destroy the client and leaves the queues in place.
 
 The SQLite dialect owns one table in the file, `queue_messages` by default. Pass `table` to namespace several queues inside one database:
 
