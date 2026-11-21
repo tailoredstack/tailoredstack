@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { DatabaseSync, type StatementSync } from "node:sqlite";
 import type { Dialect, DialectCapabilities, Message, QueueCount, Receipt } from "./dialect.ts";
+import { QueueClosedError } from "./errors.ts";
 
 export interface SqliteDialectOptions {
   path: string;
@@ -153,6 +154,6 @@ export class SqliteDialect implements Dialect {
   }
 
   private assertOpen(): void {
-    if (this.#closed) throw new Error("SqliteDialect is closed");
+    if (this.#closed) throw new QueueClosedError("SqliteDialect is closed");
   }
 }

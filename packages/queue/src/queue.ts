@@ -1,4 +1,5 @@
 import type { Dialect, Message, QueueCount, Receipt } from "./dialect.ts";
+import { InvalidArgumentError, LimitError } from "./errors.ts";
 import type { Job } from "./job.ts";
 
 type JobClass = abstract new (payload: never) => Job<unknown, unknown> & { readonly __jobKey: string };
@@ -41,27 +42,27 @@ function isPlainArray(value: unknown[]): boolean {
 function assertRoundTrips(value: unknown, path: string, ancestors: Set<object> = new Set()): void {
   if (value === null || typeof value === "string" || typeof value === "boolean") return;
   if (typeof value === "number") {
-    if (!Number.isFinite(value)) throw new Error(`${path} is not a finite number`);
-    if (Object.is(value, -0)) throw new Error(`${path} is -0, which JSON turns into 0`);
+    if (!Number.isFinite(value)) throw new InvalidArgumentError(`${path} is not a finite number`);
+    if (Object.is(value, -0)) throw new InvalidArgumentError(`${path} is -0, which JSON turns into 0`);
     return;
   }
-  if (typeof value !== "object") throw new Error(`${path} has unserializable type ${typeof value}`);
+  if (typeof value !== "object") throw new InvalidArgumentError(`${path} has unserializable type ${typeof value}`);
 
-  if (ancestors.has(value)) throw new Error(`${path} is a cycle`);
+  if (ancestors.has(value)) throw new InvalidArgumentError(`${path} is a cycle`);
   ancestors.add(value);
 
   if (Array.isArray(value)) {
-    if (!isPlainArray(value)) throw new Error(`${path} is not a plain array`);
+    if (!isPlainArray(value)) throw new InvalidArgumentError(`${path} is not a plain array`);
     if (Reflect.ownKeys(value).length !== value.length + 1) {
-      throw new Error(`${path} is sparse or has extra properties`);
+      throw new InvalidArgumentError(`${path} is sparse or has extra properties`);
     }
     for (const [index, item] of value.entries()) assertRoundTrips(item, `${path}.${index}`, ancestors);
   } else {
-    if (Object.getOwnPropertySymbols(value).length > 0) throw new Error(`${path} has a symbol key`);
-    if (!isPlainStructure(value)) throw new Error(`${path} is not a plain object`);
+    if (Object.getOwnPropertySymbols(value).length > 0) throw new InvalidArgumentError(`${path} has a symbol key`);
+    if (!isPlainStructure(value)) throw new InvalidArgumentError(`${path} is not a plain object`);
     for (const [key, descriptor] of Object.entries(Object.getOwnPropertyDescriptors(value))) {
-      if (!descriptor.enumerable) throw new Error(`${path}.${key} is not enumerable`);
-      if (!("value" in descriptor)) throw new Error(`${path}.${key} is an accessor`);
+      if (!descriptor.enumerable) throw new InvalidArgumentError(`${path}.${key} is not enumerable`);
+      if (!("value" in descriptor)) throw new InvalidArgumentError(`${path}.${key} is an accessor`);
       assertRoundTrips(descriptor.value, `${path}.${key}`, ancestors);
     }
   }
@@ -81,7 +82,9 @@ export class Queue<R extends JobRegistry> {
     for (const [key, cls] of Object.entries(options.jobs)) {
       const existing = this.keys.get(cls);
       if (existing !== undefined) {
-        throw new Error(`Job class ${cls.name} is registered under two keys: "${existing}" and "${key}"`);
+        throw new InvalidArgumentError(
+          `Job class ${cls.name} is registered under two keys: "${existing}" and "${key}"`,
+        );
       }
       this.keys.set(cls, key);
     }
@@ -91,21 +94,21 @@ export class Queue<R extends JobRegistry> {
 
   async enqueue(job: InstanceType<R[keyof R]>, options: EnqueueOptions = {}): Promise<string> {
     const key = this.keys.get(job.constructor);
-    if (key === undefined) throw new Error(`Job class ${job.constructor.name} is not registered`);
+    if (key === undefined) throw new InvalidArgumentError(`Job class ${job.constructor.name} is not registered`);
 
     const delay = options.delay ?? 0;
     if (!Number.isFinite(delay) || delay < 0) {
-      throw new Error(`Invalid delay ${delay}: must be a finite number of ms >= 0`);
+      throw new InvalidArgumentError(`Invalid delay ${delay}: must be a finite number of ms >= 0`);
     }
     if (delay > this.dialect.capabilities.maxDelayMs) {
-      throw new Error(`Delay ${delay}ms exceeds maxDelayMs ${this.dialect.capabilities.maxDelayMs}`);
+      throw new LimitError(`Delay ${delay}ms exceeds maxDelayMs ${this.dialect.capabilities.maxDelayMs}`);
     }
 
     assertRoundTrips(job.payload, "payload");
     const serialized = JSON.stringify({ job: key, payload: job.payload });
     const bytes = new TextEncoder().encode(serialized).byteLength;
     if (bytes > MAX_PAYLOAD_BYTES) {
-      throw new Error(`Payload is ${bytes} bytes, over the ${MAX_PAYLOAD_BYTES} byte limit`);
+      throw new LimitError(`Payload is ${bytes} bytes, over the ${MAX_PAYLOAD_BYTES} byte limit`);
     }
 
     const now = this.now();
@@ -114,13 +117,13 @@ export class Queue<R extends JobRegistry> {
 
   async dequeue(lease = DEFAULT_LEASE_MS): Promise<Message | null> {
     if (!Number.isFinite(lease) || lease <= 0) {
-      throw new Error(`Invalid lease ${lease}: must be a finite number of ms > 0`);
+      throw new InvalidArgumentError(`Invalid lease ${lease}: must be a finite number of ms > 0`);
     }
     assertDuration(lease, "Lease", this.dialect.capabilities.maxLeaseMs, "maxLeaseMs");
     const now = this.now();
     const leaseUntil = now + lease;
     if (leaseUntil <= now) {
-      throw new Error(`Invalid lease ${lease}: does not move leaseUntil past now ${now}`);
+      throw new InvalidArgumentError(`Invalid lease ${lease}: does not move leaseUntil past now ${now}`);
     }
     return this.dialect.dequeue(this.name, { now, leaseUntil });
   }
@@ -147,9 +150,9 @@ export class Queue<R extends JobRegistry> {
 
 function assertDuration(value: number, title: string, max: number, maxLabel: string): void {
   if (!Number.isFinite(value) || value < 0) {
-    throw new Error(`Invalid ${title.toLowerCase()} ${value}: must be a finite number of ms >= 0`);
+    throw new InvalidArgumentError(`Invalid ${title.toLowerCase()} ${value}: must be a finite number of ms >= 0`);
   }
   if (value > max) {
-    throw new Error(`${title} ${value}ms exceeds ${maxLabel} ${max}`);
+    throw new LimitError(`${title} ${value}ms exceeds ${maxLabel} ${max}`);
   }
 }

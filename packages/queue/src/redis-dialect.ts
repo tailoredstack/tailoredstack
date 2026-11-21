@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 import type { Dialect, DialectCapabilities, Message, QueueCount, Receipt } from "./dialect.ts";
+import { QueueClosedError } from "./errors.ts";
 
 /**
  * The subset of a Redis client that RedisDialect calls. Structural, so this module never imports the optional
@@ -214,7 +215,7 @@ export class RedisDialect implements Dialect {
   }
 
   private assertOpen(): void {
-    if (this.#closed) throw new Error("RedisDialect is closed");
+    if (this.#closed) throw new QueueClosedError("RedisDialect is closed");
   }
 }
 

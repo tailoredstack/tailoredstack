@@ -115,7 +115,14 @@ const program = Effect.gen(function* () {
 });
 ```
 
-Every client method returns an `Effect`. Invalid options, unregistered job classes, payload validation, and dialect failures become a tagged `QueueError` carrying the operation and its cause. The `effect` peer is optional, so the core entry still has no Effect dependency.
+Every client method returns an `Effect`. Domain errors pass through unchanged; any other failure becomes a tagged `QueueError` carrying the operation and its original cause. The `effect` peer is optional, so the core entry still has no Effect dependency.
+
+## Errors
+
+- `InvalidArgumentError`: an argument or job class the caller can fix, thrown before the dialect sees the call.
+- `LimitError`: a valid value exceeds a configured or dialect limit, such as `maxDelayMs` or the payload size.
+- `QueueClosedError`: the dialect was closed and no longer accepts calls.
+- `QueueError` (`@tailoredstack/queue/effect` only): any other failure, with `operation` and `cause`.
 
 ## Node version
 
@@ -136,6 +143,12 @@ Every client method returns an `Effect`. Invalid options, unregistered job class
 
 ```sh
 pnpm --filter @tailoredstack/queue test
+```
+
+The packed-package e2e builds, packs, and installs the tarball into clean projects, then imports and typechecks the public entries:
+
+```sh
+pnpm --filter @tailoredstack/queue test:e2e
 ```
 
 The SQLite shared suite and the cross-process SQLite lock test run against real files and need no Docker. The Redis test starts `redis:8-alpine` through testcontainers; set `REDIS_URL` to reuse an already-running server instead, for example `REDIS_URL=redis://127.0.0.1:6379 pnpm --filter @tailoredstack/queue test`. `SqsDialect` runs the same suite against a digest-pinned `floci/floci:2.4.0` through testcontainers, so its test file needs Docker. The suite adapts to a dialect's clock: `clockSource: 'caller'` dialects run on a synthetic timeline, while `clockSource: 'backend'` dialects use real, whole-second waits and the order case prints a named skip when `ordered` is false.

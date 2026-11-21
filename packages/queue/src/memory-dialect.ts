@@ -1,4 +1,5 @@
 import type { Dialect, DialectCapabilities, Message, QueueCount, Receipt } from "./dialect.ts";
+import { QueueClosedError } from "./errors.ts";
 
 interface StoredMessage {
   readonly id: string;
@@ -99,6 +100,6 @@ export class MemoryDialect implements Dialect {
   }
 
   private assertOpen(): void {
-    if (this.closed) throw new Error("MemoryDialect is closed");
+    if (this.closed) throw new QueueClosedError("MemoryDialect is closed");
   }
 }
