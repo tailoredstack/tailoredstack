@@ -1,4 +1,4 @@
-import { mkdtempSync, rmSync } from "node:fs";
+import { existsSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
@@ -49,6 +49,67 @@ describe("SqliteDialect", () => {
     opened.push(second);
     const message = await second.dequeue("jobs", { now: 1000, leaseUntil: 2000 });
     expect(message?.id).toBe(id);
+  });
+
+  it("keeps two dialects on one file apart by table name", async () => {
+    const path = join(dir, "shared.db");
+    const billing = new SqliteDialect({ path, table: "billing_queue_messages" });
+    const reports = new SqliteDialect({ path, table: "reports_queue_messages" });
+    opened.push(billing, reports);
+
+    await billing.enqueue("jobs", "invoice", { availableAt: 1000, now: 1000 });
+    expect(await reports.count("jobs", 1000)).toEqual({ ready: 0, delayed: 0, reserved: 0 });
+    expect(await billing.count("jobs", 1000)).toEqual({ ready: 1, delayed: 0, reserved: 0 });
+    expect((await billing.dequeue("jobs", { now: 1000, leaseUntil: 2000 }))?.payload).toBe("invoice");
+    expect(await reports.dequeue("jobs", { now: 1000, leaseUntil: 2000 })).toBeNull();
+
+    const probe = new DatabaseSync(path);
+    const indexes = probe
+      .prepare(
+        "SELECT name FROM sqlite_master WHERE type = 'index' AND name NOT LIKE 'sqlite_autoindex%' ORDER BY name",
+      )
+      .all()
+      .map((row) => (row as unknown as { name: string }).name);
+    const tables = probe
+      .prepare("SELECT name FROM sqlite_master WHERE type = 'table' ORDER BY name")
+      .all()
+      .map((row) => (row as unknown as { name: string }).name);
+    probe.close();
+    expect(tables).toEqual(["billing_queue_messages", "reports_queue_messages"]);
+    expect(indexes).toEqual([
+      "billing_queue_messages_due",
+      "billing_queue_messages_receipt",
+      "reports_queue_messages_due",
+      "reports_queue_messages_receipt",
+    ]);
+  });
+
+  it("quotes a table name that needs quoting instead of rejecting it", async () => {
+    const path = join(dir, "quoted.db");
+    const table = 'billing "queue"; messages';
+    const dialect = new SqliteDialect({ path, table });
+    opened.push(dialect);
+
+    await dialect.enqueue("jobs", "a", { availableAt: 1000, now: 1000 });
+    expect(await dialect.count("jobs", 1000)).toEqual({ ready: 1, delayed: 0, reserved: 0 });
+
+    const probe = new DatabaseSync(path);
+    const tables = probe
+      .prepare("SELECT name FROM sqlite_master WHERE type = 'table'")
+      .all()
+      .map((row) => (row as unknown as { name: string }).name);
+    probe.close();
+    expect(tables).toEqual([table]);
+  });
+
+  it("rejects an unusable table name before it touches the file", () => {
+    const empty = join(dir, "empty-name.db");
+    const withNul = join(dir, "nul-name.db");
+
+    expect(() => new SqliteDialect({ path: empty, table: "" })).toThrow(TypeError);
+    expect(() => new SqliteDialect({ path: withNul, table: "queue\0messages" })).toThrow(TypeError);
+    expect(existsSync(empty)).toBe(false);
+    expect(existsSync(withNul)).toBe(false);
   });
 
   it("rolls back the claim when the read fails inside the transaction", async () => {

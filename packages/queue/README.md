@@ -40,6 +40,14 @@ if (message) await queue.acknowledge(message.receipt);
 
 Swap `new SqliteDialect({ path: "./queue.db" })` for `new MemoryDialect()` to run the same code in one process with no file.
 
+The SQLite dialect owns one table in the file, `queue_messages` by default. Pass `table` to namespace several queues inside one database:
+
+```ts
+new SqliteDialect({ path: "./app.db", table: "billing_queue_messages" });
+```
+
+Index names are derived from the table name (`billing_queue_messages_due`, `billing_queue_messages_receipt`), so dialects with different tables never collide. The name is quoted, so any non-empty name without a NUL byte works; empty names throw `TypeError` before the file is opened.
+
 ## Node version
 
 `SqliteDialect` is built on `node:sqlite`. The package declares `engines: node >= 24.16.0` and CI runs the workspace `.nvmrc` (Node 26).
@@ -52,7 +60,7 @@ Swap `new SqliteDialect({ path: "./queue.db" })` for `new MemoryDialect()` to ru
 - **One host:** SQLite plus WAL is fine for many processes on one machine. For several hosts use a network broker (Redis/SQS dialects) instead. WAL needs a local filesystem, not NFS/SMB.
 - **Pass a file path.** `path: ":memory:"` gives every dialect instance its own private database, so two dialects never see each other's jobs.
 - **Counts scan per queue name:** exact `count()` touches the rows of that name. Many queue names in one file are fine; a huge backlog makes counts proportionally costlier.
-- **Schema:** the dialect owns a `queue_messages` table in the file you pass and migrates it on construction (`CREATE TABLE/INDEX IF NOT EXISTS`). Do not point it at a database whose schema is managed elsewhere.
+- **Schema:** the dialect owns its table (`table`, default `queue_messages`) and migrates it on construction (`CREATE TABLE/INDEX IF NOT EXISTS`). Point it at a file whose schema is managed elsewhere and it will still create its own table; it never touches tables it does not own.
 
 ## Running tests
 
