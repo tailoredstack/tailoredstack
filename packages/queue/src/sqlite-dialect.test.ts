@@ -58,9 +58,19 @@ describe("SqliteDialect", () => {
     await dialect.enqueue("jobs", "a", { availableAt: 1000, now: 1000 });
 
     const saboteur = new DatabaseSync(path);
+    const { sql } = saboteur
+      .prepare("SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'queue_messages'")
+      .get() as unknown as { sql: string };
     saboteur.exec("DROP TABLE queue_messages");
     saboteur.close();
 
     await expect(dialect.dequeue("jobs", { now: 1000, leaseUntil: 2000 })).rejects.toThrow(/no such table/);
+
+    const repair = new DatabaseSync(path);
+    repair.exec(sql);
+    repair.close();
+    // The rollback released the transaction: this same connection can start a new one.
+    await dialect.enqueue("jobs", "b", { availableAt: 1000, now: 1000 });
+    await expect(dialect.dequeue("jobs", { now: 1000, leaseUntil: 2000 })).resolves.toMatchObject({ payload: "b" });
   });
 });
