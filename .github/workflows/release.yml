@@ -76,7 +76,7 @@ jobs:
         run: pnpm --filter @tailoredstack/cache test:e2e
       - name: Publish to npm 🚀
         working-directory: packages/cache
-        run: npm publish --access public --provenance
+        run: pnpm publish --access public --provenance
 
   publish-queue:
     needs: release-please
@@ -102,6 +102,8 @@ jobs:
         run: pnpm build
       - name: Test ✅
         run: pnpm --filter @tailoredstack/queue test
+      - name: E2E against the packed package 🧪
+        run: pnpm --filter @tailoredstack/queue test:e2e
       - name: Publish to npm 🚀
         working-directory: packages/queue
-        run: npm publish --access public --provenance
+        run: pnpm publish --access public --provenance

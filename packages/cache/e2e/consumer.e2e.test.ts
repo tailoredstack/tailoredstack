@@ -29,10 +29,10 @@ beforeAll(async () => {
   run("pnpm", ["build"], pkgDir);
 
   packDir = mkdtempSync(join(tmpdir(), "cache-pack-"));
-  const [packed] = JSON.parse(run("npm", ["pack", "--json", "--pack-destination", packDir], pkgDir)) as {
+  const packed = JSON.parse(run("pnpm", ["pack", "--json", "--pack-destination", packDir], pkgDir)) as {
     filename: string;
-  }[];
-  if (!packed) throw new Error("npm pack produced no tarball");
+  };
+  if (!packed.filename) throw new Error("pnpm pack produced no tarball");
 
   work = mkdtempSync(join(tmpdir(), "cache-consumer-"));
   writeFileSync(join(work, "package.json"), JSON.stringify({ name: "consumer", private: true, type: "module" }));
@@ -42,7 +42,7 @@ beforeAll(async () => {
       "install",
       "--no-audit",
       "--no-fund",
-      join(packDir, packed.filename),
+      packed.filename,
       "ioredis@^6",
       "effect@^4",
       "typescript@^7",
