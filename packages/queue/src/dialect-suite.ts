@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { ClockSource, Dialect, DialectCapabilities } from "./dialect.ts";
+import { QueueClosedError } from "./errors.ts";
 
 export function exactCountsSkipTitle(title: string, name: string): string {
   return `${title} [skipped: ${name} declares capabilities.exactCounts=false]`;
@@ -249,13 +250,15 @@ export function runDialectSuite(name: string, create: () => Dialect, capabilitie
       await d.enqueue("jobs", "a", { availableAt: now, now });
       const msg = await d.dequeue("jobs", { now, leaseUntil: clock.after(1000) });
       await d.close();
-      await expect(d.enqueue("jobs", "b", { availableAt: now, now })).rejects.toThrow();
-      await expect(d.dequeue("jobs", { now, leaseUntil: clock.after(1000) })).rejects.toThrow();
-      await expect(d.acknowledge("jobs", must(msg, "delivery").receipt, clock.now())).rejects.toThrow();
+      await expect(d.enqueue("jobs", "b", { availableAt: now, now })).rejects.toBeInstanceOf(QueueClosedError);
+      await expect(d.dequeue("jobs", { now, leaseUntil: clock.after(1000) })).rejects.toBeInstanceOf(QueueClosedError);
+      await expect(d.acknowledge("jobs", must(msg, "delivery").receipt, clock.now())).rejects.toBeInstanceOf(
+        QueueClosedError,
+      );
       await expect(
         d.release("jobs", must(msg, "delivery").receipt, { availableAt: clock.after(1600), now: clock.now() }),
-      ).rejects.toThrow();
-      await expect(d.count("jobs", clock.now())).rejects.toThrow();
+      ).rejects.toBeInstanceOf(QueueClosedError);
+      await expect(d.count("jobs", clock.now())).rejects.toBeInstanceOf(QueueClosedError);
     });
 
     it("close on a fresh dialect resolves", async () => {
