@@ -23,6 +23,7 @@ export interface WorkerOptions<R extends JobRegistry> {
   readonly queue?: string;
   /** Lease length in ms. Defaults to 30_000. */
   readonly lease?: number;
+  readonly timeout?: number;
   /** Injected clock, epoch ms. Defaults to `Date.now`. */
   readonly now?: () => number;
   /** Total attempts per message, including the first. Integer >= 1. Defaults to 3. */
@@ -43,7 +44,18 @@ export interface WorkerOptions<R extends JobRegistry> {
   readonly onError?: (error: unknown) => void;
 }
 
+export class JobTimeoutError extends Error {
+  readonly timeoutMs: number;
+
+  constructor(timeoutMs: number) {
+    super(`Job timed out after ${timeoutMs} ms`);
+    this.name = "JobTimeoutError";
+    this.timeoutMs = timeoutMs;
+  }
+}
+
 const DEFAULT_LEASE_MS = 30_000;
+const DEFAULT_TIMEOUT_CAP_MS = 25_000;
 const DEFAULT_POLL_INTERVAL_MS = 1_000;
 const DEFAULT_TRIES = 3;
 const DEFAULT_BACKOFF_BASE_MS = 1_000;
@@ -56,6 +68,7 @@ export class Worker<R extends JobRegistry> {
   private readonly context: RegistryContext<R>;
   private readonly name: string;
   private readonly lease: number;
+  private readonly timeout: number;
   private readonly now: () => number;
   private readonly tries: number;
   private readonly backoffBase: number;
@@ -77,6 +90,7 @@ export class Worker<R extends JobRegistry> {
     this.context = options.context;
     this.name = options.queue ?? "default";
     this.lease = options.lease ?? DEFAULT_LEASE_MS;
+    this.timeout = options.timeout ?? Math.min(DEFAULT_TIMEOUT_CAP_MS, Math.floor(this.lease / 2));
     this.now = options.now ?? (() => Date.now());
     this.tries = options.tries ?? DEFAULT_TRIES;
     this.backoffBase = options.backoffBase ?? DEFAULT_BACKOFF_BASE_MS;
@@ -87,6 +101,15 @@ export class Worker<R extends JobRegistry> {
 
     if (!Number.isInteger(this.tries) || this.tries < 1) {
       throw new Error(`Invalid tries ${this.tries}: must be an integer >= 1`);
+    }
+    if (!Number.isFinite(this.lease) || this.lease <= 0) {
+      throw new Error(`Invalid lease ${this.lease}: must be a finite number of ms > 0`);
+    }
+    if (!Number.isInteger(this.timeout) || this.timeout <= 0) {
+      throw new Error(`Invalid timeout ${this.timeout}: must be an integer number of ms > 0`);
+    }
+    if (this.timeout >= this.lease) {
+      throw new Error(`Invalid timeout ${this.timeout}: must be less than lease ${this.lease}`);
     }
     if (!Number.isFinite(this.backoffBase) || this.backoffBase <= 0) {
       throw new Error(`Invalid backoffBase ${this.backoffBase}: must be a finite number of ms > 0`);
@@ -139,7 +162,7 @@ export class Worker<R extends JobRegistry> {
       const ctx = Object.assign(Object.create(null), this.context, { signal: controller.signal }) as JobContext<
         RegistryContext<R>
       >;
-      await instance.handle(ctx);
+      await this.runWithTimeout(instance, ctx, controller);
     } catch (error) {
       // The original error always propagates. A stale receipt (false) is ignored as before.
       // A clock throw here is discarded and skips bookkeeping. A release or acknowledge rejection is reported to onError,
@@ -238,6 +261,26 @@ export class Worker<R extends JobRegistry> {
       this.onError(error);
     } catch (reporterError) {
       console.error("Worker onError threw:", reporterError);
+    }
+  }
+
+  private async runWithTimeout(
+    instance: Job<unknown, RegistryContext<R>>,
+    ctx: JobContext<RegistryContext<R>>,
+    controller: AbortController,
+  ): Promise<void> {
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const expired = new Promise<never>((_, reject) => {
+      timer = setTimeout(() => {
+        const error = new JobTimeoutError(this.timeout);
+        controller.abort(error);
+        reject(error);
+      }, this.timeout);
+    });
+    try {
+      await Promise.race([instance.handle(ctx), expired]);
+    } finally {
+      clearTimeout(timer);
     }
   }
 

@@ -12,4 +12,4 @@ export { MemoryDialect } from "./memory-dialect.ts";
 export type { EnqueueOptions, JobRegistry, QueueOptions, ReleaseOptions } from "./queue.ts";
 export { Queue } from "./queue.ts";
 export type { RegistryContext, WorkerOptions } from "./worker.ts";
-export { Worker } from "./worker.ts";
+export { JobTimeoutError, Worker } from "./worker.ts";
