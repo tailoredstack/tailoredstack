@@ -54,7 +54,6 @@ function setup(options: { pollInterval?: number } = {}) {
 
 type Harness = ReturnType<typeof setup>;
 
-/** Resolves once the injected sleep is entered; the returned sleep never resolves on its own. */
 function parkInSleep(): { entered: Promise<void>; sleep: (ms: number) => Promise<void> } {
   let enter: () => void = () => {};
   const entered = new Promise<void>((resolve) => {
@@ -69,7 +68,6 @@ function parkInSleep(): { entered: Promise<void>; sleep: (ms: number) => Promise
   };
 }
 
-// Compile-time check: pollInterval must be a number. Never called; tsc checks the @ts-expect-error line.
 function typeChecks(dialect: MemoryDialect): void {
   new Worker({
     dialect,
@@ -226,7 +224,6 @@ describe("Worker run loop", () => {
     });
     await dialect.enqueue("default", JSON.stringify({ job: "Nope", payload: {} }), { availableAt: 0, now: 0 });
 
-    // Attempt 1 at 1000 releases to 2000; attempt 2 at 2000 releases to 4000; attempt 3 at 4000 acks.
     await expect(worker.processOne()).rejects.toThrow(/Nope/);
     clock.now = 2_000;
     await expect(worker.processOne()).rejects.toThrow(/Nope/);
@@ -239,7 +236,6 @@ describe("Worker run loop", () => {
   });
 
   it("a dequeue error waits pollInterval before the next dequeue", async () => {
-    // The default onError reports the dequeue error with console.error; silence it and restore it at the end.
     const consoleError = vi.spyOn(console, "error").mockImplementation(() => {});
     const h = setup({ pollInterval: 700 });
     const order: string[] = [];
@@ -258,7 +254,6 @@ describe("Worker run loop", () => {
 
     await expect(h.worker.run()).resolves.toBeUndefined();
 
-    // The third dequeue calls stop(), so its idle wait is skipped (stop already requested).
     expect(order).toEqual(["dequeue", "sleep", "dequeue", "sleep", "dequeue"]);
     expect(h.sleeps).toEqual([700, 700]);
     expect(consoleError).toHaveBeenCalledTimes(1);
@@ -284,8 +279,6 @@ describe("Worker run loop", () => {
   it("a clock throw after a job still waits before the next dequeue", async () => {
     const dialect = new MemoryDialect();
     let calls = 0;
-    // Call 1: first processOne dequeue time. Call 2: ack time, so the job succeeds.
-    // Call 3: second processOne dequeue time, which throws. The flag was left true by the first job.
     const now = (): number => {
       calls += 1;
       if (calls === 3) throw new Error("clock down");
@@ -317,8 +310,6 @@ describe("Worker run loop", () => {
 
     await expect(worker.run()).resolves.toBeUndefined();
 
-    // Dequeue 1 runs the job. The clock throws before dequeue 2 reaches the dialect, so the loop must sleep before dequeue 2.
-    // The second dequeue calls stop(), so its idle wait is skipped (stop already requested).
     expect(order).toEqual(["dequeue", "sleep", "dequeue"]);
   });
 

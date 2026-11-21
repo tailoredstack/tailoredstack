@@ -1,28 +1,15 @@
 import { describe, expect, it } from "vitest";
 import type { Dialect } from "./dialect.ts";
 
-/**
- * Title suffix for a case skipped because the dialect declares `exactCounts: false`.
- * Exported so the skip reason is unit-tested (see dialect-suite.test.ts).
- */
 export function exactCountsSkipTitle(title: string, name: string): string {
   return `${title} [skipped: ${name} declares capabilities.exactCounts=false]`;
 }
 
-/** Narrows a value that the test has just set up; throws a named error if it is missing. */
 function must<T>(value: T | null | undefined, what: string): T {
   if (value == null) throw new Error(`dialect suite: expected ${what} to be present`);
   return value;
 }
 
-/**
- * Shared contract cases for `Dialect` implementations. Each case builds a fresh
- * dialect via `create`, so cases never share state. Cases that depend on exact
- * counts are skipped, with a named reason, when `capabilities.exactCounts` is false.
- *
- * Test infrastructure: excluded from coverage and from the build by exact path
- * (vitest.config.ts, tsconfig.json).
- */
 export function runDialectSuite(name: string, create: () => Dialect): void {
   describe(`Dialect suite: ${name}`, () => {
     const { capabilities } = create();

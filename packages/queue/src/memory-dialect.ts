@@ -7,14 +7,9 @@ interface StoredMessage {
   availableAt: number;
   leaseUntil: number;
   attempts: number;
-  /** Receipt of the current delivery; null when the message is not reserved. */
   receipt: Receipt | null;
 }
 
-/**
- * In-process `Dialect`. Never reads a clock: every time is the caller's `now`.
- * After `close`, every other method rejects.
- */
 export class MemoryDialect implements Dialect {
   readonly capabilities: DialectCapabilities = {
     ordered: true,
@@ -47,8 +42,6 @@ export class MemoryDialect implements Dialect {
 
   async dequeue(name: string, at: { now: number; leaseUntil: number }): Promise<Message | null> {
     this.assertOpen();
-    // Ready: due and not under a live lease (live means now < leaseUntil). Earliest-due wins;
-    // the stable sort keeps push order for ties.
     const [next] = this.messages
       .filter((m) => m.name === name && m.availableAt <= at.now && m.leaseUntil <= at.now)
       .sort((a, b) => a.availableAt - b.availableAt);
@@ -97,7 +90,6 @@ export class MemoryDialect implements Dialect {
     return { ready, delayed, reserved };
   }
 
-  /** The message holding `receipt` on queue `name` if that receipt is current and its lease is live. */
   private findLive(name: string, receipt: Receipt, now: number): StoredMessage | undefined {
     return this.messages.find((m) => m.name === name && m.receipt === receipt && m.leaseUntil > now);
   }

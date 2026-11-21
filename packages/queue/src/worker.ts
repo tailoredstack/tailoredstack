@@ -2,45 +2,25 @@ import type { Dialect, Message } from "./dialect.ts";
 import type { Job, JobContext } from "./job.ts";
 import type { BrandedRegistry, JobRegistry } from "./queue.ts";
 
-/** The context type a job class expects, read from its `Job<Payload, Ctx>` base. */
 type ContextOf<C> = C extends abstract new (payload: never) => Job<unknown, infer X> ? X : never;
 
-/** Union-to-intersection: `U` becomes `A & B` when `U` is `A | B`. */
 type UnionToIntersection<U> = (U extends unknown ? (arg: U) => void : never) extends (arg: infer I) => void ? I : never;
 
-/**
- * The context every registered job needs together: the intersection of every job's `Ctx`.
- * A union here would let a context satisfy one job while missing another job's field.
- */
 export type RegistryContext<R extends JobRegistry> = UnionToIntersection<ContextOf<R[keyof R]>>;
 
 export interface WorkerOptions<R extends JobRegistry> {
   readonly dialect: Dialect;
   readonly jobs: R & BrandedRegistry<R>;
-  /** Passed to every job run, merged with a fresh `signal`. */
   readonly context: RegistryContext<R>;
-  /** Queue name. Defaults to `default`. */
   readonly queue?: string;
-  /** Lease length in ms. Defaults to 30_000. */
   readonly lease?: number;
   readonly timeout?: number;
-  /** Injected clock, epoch ms. Defaults to `Date.now`. */
   readonly now?: () => number;
-  /** Total attempts per message, including the first. Integer >= 1. Defaults to 3. */
   readonly tries?: number;
-  /** Delay in ms after the first failed attempt. Finite, > 0. Defaults to 1_000. */
   readonly backoffBase?: number;
-  /** Upper bound in ms on any retry delay. Finite, >= `backoffBase`. Defaults to 60_000. */
   readonly backoffCap?: number;
-  /** Idle wait in ms between empty dequeues. Finite, > 0. Defaults to 1_000. */
   readonly pollInterval?: number;
-  /** Injected idle sleep. Defaults to a `setTimeout`-based sleep. */
   readonly sleep?: (ms: number) => Promise<void>;
-  /**
-   * Receives dialect errors (dequeue, release, acknowledge rejections). Handle errors are not reported here.
-   * Defaults to `console.error`. If onError throws, the throw is logged with console.error ("Worker onError threw:")
-   * and the loop keeps running; it is never rethrown.
-   */
   readonly onError?: (error: unknown) => void;
 }
 
@@ -61,7 +41,6 @@ const DEFAULT_TRIES = 3;
 const DEFAULT_BACKOFF_BASE_MS = 1_000;
 const DEFAULT_BACKOFF_CAP_MS = 60_000;
 
-/** Runs one job per `processOne` call, in dequeue order. */
 export class Worker<R extends JobRegistry> {
   private readonly dialect: Dialect;
   private readonly jobs: R;
@@ -80,7 +59,6 @@ export class Worker<R extends JobRegistry> {
   private stopRequested = false;
   private running = false;
   private dequeued = false;
-  /** Set by processOne when a dialect call that run() must report (dequeue, success-path acknowledge) rejects. */
   private dialectFailure: { error: unknown } | undefined;
   private wake: (() => void) | undefined;
 
@@ -121,7 +99,6 @@ export class Worker<R extends JobRegistry> {
       throw new Error(`Invalid pollInterval ${this.pollInterval}: must be a finite number of ms > 0`);
     }
 
-    // Same class under two keys would run the wrong key's mapping. Mirrors Queue's runtime check.
     const keys = new Map<object, string>();
     for (const [key, cls] of Object.entries(options.jobs)) {
       const existing = keys.get(cls);
@@ -132,13 +109,7 @@ export class Worker<R extends JobRegistry> {
     }
   }
 
-  /**
-   * Dequeues and runs one job. Resolves `false` when nothing is ready. Acknowledges on success.
-   * On any failure after dequeue (envelope, unknown key, or handle): releases with capped exponential backoff
-   * while attempts < tries, else acknowledges (drops). Always rethrows the original error.
-   */
   async processOne(): Promise<boolean> {
-    // Clear before the clock is read: a clock throw here must not re-report the previous job's dialect failure.
     this.dialectFailure = undefined;
     const now = this.now();
     this.dequeued = false;
@@ -153,7 +124,6 @@ export class Worker<R extends JobRegistry> {
     if (message === null) return false;
 
     try {
-      // Envelope and lookup failures take the same retry path as handle failures (TS-78 release or ack).
       const { job, payload } = parseEnvelope(message.payload);
       const Cls = this.lookup(job);
       const instance = new Cls(payload);
@@ -164,15 +134,10 @@ export class Worker<R extends JobRegistry> {
       >;
       await this.runWithTimeout(instance, ctx, controller);
     } catch (error) {
-      // The original error always propagates. A stale receipt (false) is ignored as before.
-      // A clock throw here is discarded and skips bookkeeping. A release or acknowledge rejection is reported to onError,
-      // and never replaces the handle error.
       let failedAt: number | undefined;
       try {
         failedAt = this.now();
-      } catch {
-        // Intentionally discarded: a clock failure must not replace the handle error.
-      }
+      } catch {}
       if (failedAt !== undefined) {
         try {
           if (message.attempts < this.tries) {
@@ -200,13 +165,6 @@ export class Worker<R extends JobRegistry> {
     return true;
   }
 
-  /**
-   * Loops `processOne()` until `stop()`. A job that ran is followed by an immediate dequeue; an empty dequeue
-   * waits `pollInterval`. A dialect error (dequeue or success-path acknowledge) goes to `onError`. A handler error is
-   * caught and the loop continues, so run() never rejects for it. Handle errors are still dropped here, which is a
-   * remaining gap out of scope for TS-92. Envelope and unknown-key errors are also still dropped and not reported.
-   * Rejects if run() is already active. A stop() before run() resolves it without dequeuing.
-   */
   async run(): Promise<void> {
     if (this.running) throw new Error("Worker.run() is already running");
     this.running = true;
@@ -217,9 +175,6 @@ export class Worker<R extends JobRegistry> {
         try {
           ran = await this.processOne();
         } catch {
-          // Handle errors are dropped here (out of scope for TS-92). processOne has already released or acknowledged the message.
-          // A dialect failure is reported to onError. A dequeue failure (no message yet) falls through to the idle wait
-          // so a dead dialect cannot hot-loop.
           if (this.dialectFailure !== undefined) this.reportDialectError(this.dialectFailure.error);
           ran = this.dequeued;
         }
@@ -230,14 +185,12 @@ export class Worker<R extends JobRegistry> {
     }
   }
 
-  /** Requests a stop. The in-flight job finishes, and an idle wait ends at once. Idempotent. */
   stop(): void {
     this.stopRequested = true;
     this.stopped.resolve();
     this.wake?.();
   }
 
-  /** Idle wait that ends early when stop() is called. The default timer is cleared on stop so it does not keep the process alive. */
   private idle(): Promise<void> {
     if (this.stopRequested) return Promise.resolve();
     if (this.injectedSleep) return Promise.race([this.injectedSleep(this.pollInterval), this.stopped.promise]);
@@ -252,10 +205,6 @@ export class Worker<R extends JobRegistry> {
     });
   }
 
-  /**
-   * Calls onError. If onError throws, that error is logged with console.error ("Worker onError threw:") and dropped,
-   * so the loop keeps running. It is never rethrown.
-   */
   private reportDialectError(error: unknown): void {
     try {
       this.onError(error);
@@ -284,7 +233,6 @@ export class Worker<R extends JobRegistry> {
     }
   }
 
-  /** Delay after the failed `attempt` (1-based): min(cap, base * 2^(attempt - 1)). No jitter. */
   private backoffDelay(attempt: number): number {
     return Math.min(this.backoffCap, this.backoffBase * 2 ** (attempt - 1));
   }
@@ -297,12 +245,10 @@ export class Worker<R extends JobRegistry> {
   }
 }
 
-/** Default dialect-error sink: report and keep running, as Laravel does for transient queue errors. */
 function defaultOnError(error: unknown): void {
   console.error("Worker dialect error:", error);
 }
 
-/** Parses `{ job, payload }`. Throws without acknowledging anything when the envelope is malformed. */
 function parseEnvelope(raw: string): { job: string; payload: unknown } {
   let parsed: unknown;
   try {

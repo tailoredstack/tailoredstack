@@ -13,10 +13,6 @@ class SendMail extends Job<{ readonly to: string }> {
 const MAX_DELAY_MS = 60_000;
 const MAX_LEASE_MS = 60_000;
 
-/**
- * Wraps a real MemoryDialect with spied methods and overridable capabilities. Every call
- * reaches the MemoryDialect, so behavior is real; the spies only prove whether a call happened.
- */
 function spiedDialect(capabilities: Partial<DialectCapabilities> = {}) {
   const inner = new MemoryDialect();
   const spies = {
@@ -250,7 +246,6 @@ describe("Queue pass-through methods", () => {
 
   describe("compile-time checks", () => {
     it("declares the compile-time checks (type-checked only, never invoked)", () => {
-      // Nothing here runs: the function exists so tsc checks each @ts-expect-error line.
       const compileOnly = (queue: Queue<{ SendMail: typeof SendMail }>) => {
         // @ts-expect-error a plain string is not a Receipt
         void queue.acknowledge("plain-string");

@@ -63,7 +63,6 @@ function setup(options: { onError?: (error: unknown) => void; tries?: number } =
 
 type Harness = ReturnType<typeof setup>;
 
-// Compile-time check: onError must be a function. Never called; tsc checks the @ts-expect-error line.
 function typeChecks(dialect: Dialect): void {
   new Worker({
     dialect,
@@ -303,7 +302,6 @@ describe("Worker onError routing for dialect errors", () => {
     let clockCalls = 0;
     const now = (): number => {
       clockCalls += 1;
-      // Call 1 is the first processOne dequeue time, which succeeds. Call 2 is the second processOne, which throws.
       if (clockCalls === 2) throw clockDown;
       return 1_000;
     };
