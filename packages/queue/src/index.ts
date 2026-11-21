@@ -11,5 +11,7 @@ export { Job } from "./job.ts";
 export { MemoryDialect } from "./memory-dialect.ts";
 export type { EnqueueOptions, JobRegistry, QueueOptions, ReleaseOptions } from "./queue.ts";
 export { Queue } from "./queue.ts";
+export type { SqliteDialectOptions } from "./sqlite-dialect.ts";
+export { SqliteDialect } from "./sqlite-dialect.ts";
 export type { RegistryContext, WorkerOptions } from "./worker.ts";
 export { JobTimeoutError, Worker } from "./worker.ts";
