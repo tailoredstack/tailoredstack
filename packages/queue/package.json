@@ -35,7 +35,7 @@
     "lint:fix": "biome check --write src test e2e vitest.config.ts vitest.e2e.config.ts"
   },
   "peerDependencies": {
-    "@aws-sdk/client-sqs": "^3.1169.0",
+    "@aws-sdk/client-sqs": "^3.1175.0",
     "effect": "catalog:",
     "ioredis": "^6.0.0"
   },
@@ -51,19 +51,19 @@
     }
   },
   "devDependencies": {
-    "@aws-sdk/client-sqs": "^3.1169.0",
+    "@aws-sdk/client-sqs": "^3.1175.0",
     "@biomejs/biome": "^2.6.8",
     "@effect/vitest": "catalog:",
     "@floci/testcontainers": "0.4.0",
-    "@testcontainers/redis": "^12.2.1",
-    "@testcontainers/valkey": "^12.2.1",
+    "@testcontainers/redis": "^12.2.2",
+    "@testcontainers/valkey": "^12.2.2",
     "@types/node": "^26.6.6",
-    "@vitest/coverage-v8": "^5.1.0",
+    "@vitest/coverage-v8": "^5.1.1",
     "effect": "catalog:",
     "ioredis": "^6.0.0",
-    "testcontainers": "^12.2.1",
+    "testcontainers": "^12.2.2",
     "typescript": "^7.0.2",
-    "vitest": "^5.1.0"
+    "vitest": "^5.1.1"
   },
   "author": "Jose Ederango Jr",
   "repository": {
